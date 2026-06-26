@@ -24,7 +24,7 @@ func TestCategoryRestoreSupported(t *testing.T) {
 		t.Error("AppProtectionPolicies should be restorable")
 	}
 	// Backup-only categories.
-	for _, c := range []string{"MobileApps", "GroupPolicyConfigurations", "EndpointSecurityIntents"} {
+	for _, c := range []string{"GroupPolicyConfigurations", "EndpointSecurityIntents", "EnrollmentConfigurations"} {
 		if CategoryRestoreSupported(c) {
 			t.Errorf("%s should be backup-only", c)
 		}

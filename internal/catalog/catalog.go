@@ -94,8 +94,6 @@ func All() []PolicyType {
 			ListPath: "/deviceManagement/assignmentFilters", NameField: "displayName", RestoreSupported: true, Verified: true},
 
 		// --- Apps & app management ---
-		{Key: "mobileApps", Friendly: "Apps", Category: "MobileApps", Group: "Apps", Version: "beta",
-			ListPath: "/deviceAppManagement/mobileApps", NameField: "displayName", RestoreSupported: false, Verified: true},
 		{Key: "appConfigDevice", Friendly: "App configuration (devices)", Category: "AppConfigurationPolicies", Group: "Apps", Version: "beta",
 			ListPath: "/deviceAppManagement/mobileAppConfigurations", NameField: "displayName", RestoreSupported: true, Verified: true},
 		{Key: "appConfigManaged", Friendly: "App configuration (managed apps)", Category: "ManagedAppConfigurations", Group: "Apps", Version: "beta",

@@ -12,7 +12,7 @@ Built with Go and the [Charm](https://charm.land) stack (Bubble Tea, Lip Gloss).
 - Interactive browser or device-code sign-in (delegated permissions; no app
   registration needed). Client secret and certificate flows are supported for
   unattended use.
-- Backs up 28 Intune policy types to per-policy JSON files plus a
+- Backs up 27 Intune policy types to per-policy JSON files plus a
   `metadata.json` manifest and a `backup.log`, in a layout cross-compatible with
   the TenuVault portal. Script content, settings-catalog settings, admin-template
   definition values, and security-baseline intent settings are fetched in full.
@@ -34,13 +34,13 @@ templates, compliance, endpoint security baselines), scripts (Windows, macOS
 shell, proactive remediations, custom attributes), enrollment and updates
 (Autopilot, enrollment configurations, feature/quality/driver updates), tenant
 administration (scope tags, device categories, terms and conditions,
-notification templates, assignment filters), apps (apps, app configuration,
+notification templates, assignment filters), apps (app configuration,
 app protection for iOS/Android/Windows, Windows information protection, app
 categories), and conditional access.
 
-Apps, administrative templates, security-baseline intents, and enrollment
-configurations are backup-only (they require content upload or multi-part
-creates and are excluded from restore for safety).
+Administrative templates, security-baseline intents, and enrollment
+configurations are backup-only (they require multi-part creates and are
+excluded from restore for safety).
 
 ## Install
 
