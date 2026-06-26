@@ -37,9 +37,10 @@ type Config struct {
 	// or secrets are ever persisted).
 	Connections []ConnConfig `json:"connections,omitempty"`
 
-	// Optional unattended credentials (read from config or env; never required).
-	ClientSecret    string `json:"clientSecret,omitempty"`
-	CertificatePath string `json:"certificatePath,omitempty"`
+	// Optional unattended credentials. Secrets are never persisted (see Save).
+	ClientSecret        string `json:"-"`
+	CertificatePath     string `json:"certificatePath,omitempty"`
+	CertificatePassword string `json:"-"`
 }
 
 // ConnConfig is the persisted metadata for one tenant connection.

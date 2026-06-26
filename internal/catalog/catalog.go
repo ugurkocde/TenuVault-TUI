@@ -44,7 +44,7 @@ func (p PolicyType) RestoreEndpoint() string { return p.ListPath }
 func All() []PolicyType {
 	return []PolicyType{
 		// --- Configuration & compliance ---
-		{Key: "deviceConfigurations", Friendly: "Device configurations", Category: "DeviceConfigurations", Group: "Configuration", Version: "v1.0",
+		{Key: "deviceConfigurations", Friendly: "Device configurations", Category: "DeviceConfigurations", Group: "Configuration", Version: "beta",
 			ListPath: "/deviceManagement/deviceConfigurations", NameField: "displayName", RestoreSupported: true, Verified: true},
 		{Key: "configurationPolicies", Friendly: "Settings catalog", Category: "ConfigurationPolicies", Group: "Configuration", Version: "beta",
 			ListPath: "/deviceManagement/configurationPolicies", NameField: "name", DetailByID: true, Expand: "settings", RestoreSupported: true, Verified: true},
@@ -52,7 +52,7 @@ func All() []PolicyType {
 			ListPath: "/deviceManagement/groupPolicyConfigurations", NameField: "displayName",
 			Sub:              &SubResource{Suffix: "definitionValues", Expand: "presentationValues($expand=presentation),definition", EmbedKey: "definitionValues"},
 			RestoreSupported: false, Verified: true},
-		{Key: "compliancePolicies", Friendly: "Compliance policies", Category: "CompliancePolicies", Group: "Configuration", Version: "v1.0",
+		{Key: "compliancePolicies", Friendly: "Compliance policies", Category: "CompliancePolicies", Group: "Configuration", Version: "beta",
 			ListPath: "/deviceManagement/deviceCompliancePolicies", NameField: "displayName", DetailByID: true, Expand: "scheduledActionsForRule", RestoreSupported: true, Verified: true},
 		{Key: "intents", Friendly: "Endpoint security / baselines", Category: "EndpointSecurityIntents", Group: "Configuration", Version: "beta",
 			ListPath: "/deviceManagement/intents", NameField: "displayName",
@@ -110,7 +110,7 @@ func All() []PolicyType {
 			ListPath: "/deviceAppManagement/mobileAppCategories", NameField: "displayName", RestoreSupported: true, Verified: true},
 
 		// --- Identity ---
-		{Key: "conditionalAccess", Friendly: "Conditional access", Category: "ConditionalAccessPolicies", Group: "Identity", Version: "v1.0",
+		{Key: "conditionalAccess", Friendly: "Conditional access", Category: "ConditionalAccessPolicies", Group: "Identity", Version: "beta",
 			ListPath: "/identity/conditionalAccess/policies", NameField: "displayName", RestoreSupported: true, Verified: true},
 	}
 }

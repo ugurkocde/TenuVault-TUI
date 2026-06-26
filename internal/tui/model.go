@@ -23,6 +23,7 @@ type screen int
 
 const (
 	screenAuth screen = iota
+	screenAuthForm
 	screenConnecting
 	screenDashboard
 	screenBackupSelect
@@ -72,6 +73,14 @@ type authOption struct {
 	method config.AuthMethod
 }
 
+// formField is one editable field in the app-registration sign-in form.
+type formField struct {
+	label    string
+	value    string
+	masked   bool
+	optional bool
+}
+
 type catSel struct {
 	pt  catalog.PolicyType
 	sel bool
@@ -112,13 +121,14 @@ type model struct {
 	conns      []connection.Connection
 	sourceIdx  int
 	connected  bool
-	deviceCode string
 	addingConn bool
 	connCursor int
 
 	// auth screen
-	authOptions []authOption
-	authCursor  int
+	authOptions    []authOption
+	authCursor     int
+	authFormFields []formField
+	authFormCursor int
 
 	// dashboard
 	dashCursor int
@@ -234,8 +244,9 @@ func New(cfg config.Config) model {
 		th:     newTheme(),
 		screen: start,
 		authOptions: []authOption{
-			{"Interactive sign-in", "Opens your browser. No app registration needed.", config.AuthInteractive},
-			{"Device code", "Headless: enter a code at microsoft.com/devicelogin.", config.AuthDeviceCode},
+			{"Interactive sign-in", "Opens your browser. Delegated; no app registration needed.", config.AuthInteractive},
+			{"App registration · client secret", "Tenant id, client id, and a client secret.", config.AuthSecret},
+			{"App registration · certificate", "Tenant id, client id, and a certificate file.", config.AuthCertificate},
 		},
 		progEvents:   map[string]string{},
 		progFriendly: map[string]string{},

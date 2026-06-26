@@ -9,9 +9,9 @@ Built with Go and the [Charm](https://charm.land) stack (Bubble Tea, Lip Gloss).
 
 ## Features
 
-- Interactive browser or device-code sign-in (delegated permissions; no app
-  registration needed). Client secret and certificate flows are supported for
-  unattended use.
+- Interactive browser sign-in (delegated; no app registration needed), or
+  app-registration sign-in entered in the UI (client secret or certificate).
+  Device code is intentionally not supported (phishing risk).
 - Backs up 27 Intune policy types to per-policy JSON files plus a
   `metadata.json` manifest and a `backup.log`, in a layout cross-compatible with
   the TenuVault portal. Script content, settings-catalog settings, admin-template
@@ -78,9 +78,10 @@ Flags:
 | `-backup-root`  | Directory to store backups (overrides config)  |
 | `-version`      | Print version and exit                         |
 
-On first run, choose a sign-in method. Interactive sign-in opens your browser;
-device code prints a code to enter at `microsoft.com/devicelogin`. After signing
-in, the dashboard shows your tenant and last backup.
+On first run, choose a sign-in method: interactive (opens your browser) or
+app registration (enter tenant id, client id, and a client secret or certificate
+path in the form). After signing in, the dashboard shows your tenant and last
+backup.
 
 Keys: `b` back up, `l` browse, `d` compare, `r` restore, `y` sync, `t` tenants,
 `s` settings, arrow keys / `j` `k` to move, `space` to toggle, `enter` to select,
@@ -99,7 +100,7 @@ remembered across launches (metadata only — no tokens or secrets are stored).
 
 ## Permissions
 
-Interactive and device-code sign-in request the scopes below explicitly, so the
+Interactive sign-in requests the scopes below explicitly, so the
 signed-in admin is prompted to consent to them in each tenant (the first tenant
 and any tenant you add for sync). App-only (secret/certificate) sign-in uses
 `.default` — consent those permissions on the app registration instead. The

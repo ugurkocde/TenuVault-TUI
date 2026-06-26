@@ -77,12 +77,10 @@ func (m model) keyConnections(key string) (tea.Model, tea.Cmd) {
 		}
 	case "a":
 		m.addingConn = true
-		m.deviceCode = ""
 		m.goTo(screenAuth)
 	case "enter":
 		if m.connCursor == addIdx {
 			m.addingConn = true
-			m.deviceCode = ""
 			m.goTo(screenAuth)
 			return m, nil
 		}
@@ -92,9 +90,13 @@ func (m model) keyConnections(key string) (tea.Model, tea.Cmd) {
 			m.goTo(screenDashboard)
 			return m, nil
 		}
-		// Reconnect a remembered tenant.
+		// Reconnect a remembered tenant. App-registration tenants go back through
+		// the form so the secret (never persisted) can be re-entered.
 		cfg := row.cc.Apply(m.cfg)
-		m.deviceCode = ""
+		if cfg.AuthMethod == config.AuthSecret || cfg.AuthMethod == config.AuthCertificate {
+			m.cfg = cfg
+			return m.startAuthForm(cfg.AuthMethod)
+		}
 		m.goTo(screenConnecting)
 		return m, tea.Batch(connect(m.ctx, cfg, m.ch), listen(m.ctx, m.ch))
 	case "esc", "q":

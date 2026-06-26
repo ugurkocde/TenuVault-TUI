@@ -19,7 +19,7 @@ type Tenant struct {
 // smoke test after authentication.
 func (c *Client) Organization(ctx context.Context) (Tenant, error) {
 	q := url.Values{"$select": {"id,displayName,verifiedDomains"}}
-	data, err := c.Get(ctx, "v1.0", "/organization", q)
+	data, err := c.Get(ctx, "beta", "/organization", q)
 	if err != nil {
 		return Tenant{}, err
 	}

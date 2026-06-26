@@ -28,6 +28,8 @@ func (m model) render() string {
 	switch m.screen {
 	case screenAuth:
 		body, hints = m.viewAuth(w)
+	case screenAuthForm:
+		body, hints = m.viewAuthForm(w), "enter sign in · tab / ↑↓ move · esc back"
 	case screenConnecting:
 		body, hints = m.viewConnecting(), "esc cancel"
 	case screenDashboard:
@@ -147,12 +149,10 @@ func (m model) viewConnecting() string {
 	sp := m.th.accent.Render(spinnerFrames[m.frame%len(spinnerFrames)])
 	var b strings.Builder
 	b.WriteString(sp + " " + m.th.title.Render("Signing in…") + "\n\n")
-	if m.deviceCode != "" {
-		b.WriteString(m.th.warn.Render(m.deviceCode) + "\n")
-	} else if m.cfg.AuthMethod == "interactive" {
+	if m.cfg.AuthMethod == config.AuthInteractive {
 		b.WriteString(m.th.dim.Render("Opening your browser to complete sign-in.") + "\n")
 	} else {
-		b.WriteString(m.th.dim.Render("Requesting a device code…") + "\n")
+		b.WriteString(m.th.dim.Render("Authenticating with the app registration…") + "\n")
 	}
 	return b.String()
 }
@@ -417,7 +417,6 @@ func (m model) viewSettings(w int) string {
 	}{
 		{"Include assignments in backups", onOff(m.cfg.IncludeAssignments)},
 		{"Retention (days, 0 = keep all)", fmt.Sprintf("%d", m.cfg.RetentionDays)},
-		{"Sign-in method", string(m.cfg.AuthMethod)},
 	}
 	for i, r := range rows {
 		marker := "  "

@@ -21,8 +21,7 @@ import (
 
 // Async message types.
 type (
-	deviceCodeMsg string
-	connectedMsg  struct {
+	connectedMsg struct {
 		client *graph.Client
 		tenant graph.Tenant
 		cfg    config.Config
@@ -68,7 +67,7 @@ func send(ctx context.Context, ch chan tea.Msg, msg tea.Msg) {
 func connect(ctx context.Context, cfg config.Config, ch chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		go func() {
-			cred, err := auth.New(cfg, func(msg string) { send(ctx, ch, deviceCodeMsg(msg)) })
+			cred, err := auth.New(cfg)
 			if err != nil {
 				send(ctx, ch, errMsg{err})
 				return

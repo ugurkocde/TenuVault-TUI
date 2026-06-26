@@ -5,7 +5,6 @@
 package auth
 
 import (
-	"context"
 	"fmt"
 	"os"
 
@@ -45,12 +44,10 @@ func ScopesFor(method config.AuthMethod) []string {
 	}
 }
 
-// DeviceCodePrompt is called with the device-code instructions to show the user.
-type DeviceCodePrompt func(message string)
-
-// New constructs a token credential for the configured authentication method.
-// prompt may be nil for non-device-code flows.
-func New(cfg config.Config, prompt DeviceCodePrompt) (azcore.TokenCredential, error) {
+// New constructs a token credential for the configured authentication method:
+// interactive browser sign-in (delegated), or app-registration credentials
+// (client secret or certificate). Device code is intentionally not supported.
+func New(cfg config.Config) (azcore.TokenCredential, error) {
 	clientID := cfg.ClientID
 	if clientID == "" {
 		clientID = config.WellKnownClientID
@@ -61,25 +58,13 @@ func New(cfg config.Config, prompt DeviceCodePrompt) (azcore.TokenCredential, er
 	}
 
 	switch cfg.AuthMethod {
-	case config.AuthDeviceCode:
-		return azidentity.NewDeviceCodeCredential(&azidentity.DeviceCodeCredentialOptions{
-			ClientID: clientID,
-			TenantID: tenantID,
-			UserPrompt: func(_ context.Context, m azidentity.DeviceCodeMessage) error {
-				if prompt != nil {
-					prompt(m.Message)
-				}
-				return nil
-			},
-		})
-
 	case config.AuthSecret:
 		secret := cfg.ClientSecret
 		if secret == "" {
 			secret = os.Getenv("AZURE_CLIENT_SECRET")
 		}
 		if secret == "" {
-			return nil, fmt.Errorf("client secret auth selected but no secret provided (set AZURE_CLIENT_SECRET)")
+			return nil, fmt.Errorf("client secret auth selected but no secret provided")
 		}
 		if tenantID == "organizations" {
 			return nil, fmt.Errorf("client secret auth requires a concrete tenant id")
@@ -88,15 +73,17 @@ func New(cfg config.Config, prompt DeviceCodePrompt) (azcore.TokenCredential, er
 
 	case config.AuthCertificate:
 		if cfg.CertificatePath == "" {
-			return nil, fmt.Errorf("certificate auth selected but no certificatePath provided")
+			return nil, fmt.Errorf("certificate auth selected but no certificate path provided")
 		}
 		data, err := os.ReadFile(cfg.CertificatePath)
 		if err != nil {
 			return nil, fmt.Errorf("read certificate: %w", err)
 		}
-		var password []byte
-		if p := os.Getenv("AZURE_CLIENT_CERTIFICATE_PASSWORD"); p != "" {
-			password = []byte(p)
+		password := []byte(cfg.CertificatePassword)
+		if len(password) == 0 {
+			if p := os.Getenv("AZURE_CLIENT_CERTIFICATE_PASSWORD"); p != "" {
+				password = []byte(p)
+			}
 		}
 		certs, key, err := azidentity.ParseCertificates(data, password)
 		if err != nil {

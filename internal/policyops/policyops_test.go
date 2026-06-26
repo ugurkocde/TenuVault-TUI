@@ -17,7 +17,7 @@ func TestPrepareCreateCleansAndPrefixes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != "v1.0" || endpoint != "/deviceManagement/deviceConfigurations" {
+	if version != "beta" || endpoint != "/deviceManagement/deviceConfigurations" {
 		t.Errorf("route = %s %s", version, endpoint)
 	}
 	var m map[string]any

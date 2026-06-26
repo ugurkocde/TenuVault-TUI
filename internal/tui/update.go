@@ -24,10 +24,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.frame++
 		return m, tick()
 
-	case deviceCodeMsg:
-		m.deviceCode = string(msg)
-		return m, listen(m.ctx, m.ch)
-
 	case connectedMsg:
 		// Capture the real tenant id (sign-in may have used "organizations"), so
 		// the connection is matched and re-targeted by its actual tenant.
@@ -192,6 +188,8 @@ func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenAuth:
 		return m.keyAuth(key)
+	case screenAuthForm:
+		return m.keyAuthForm(key)
 	case screenConnecting:
 		if key == "esc" {
 			m.goTo(screenAuth)
@@ -272,10 +270,13 @@ func (m model) keyAuth(key string) (tea.Model, tea.Cmd) {
 	case "q":
 		return m, tea.Quit
 	case "enter":
-		m.cfg.AuthMethod = m.authOptions[m.authCursor].method
-		m.deviceCode = ""
-		m.goTo(screenConnecting)
-		return m, tea.Batch(connect(m.ctx, m.cfg, m.ch), listen(m.ctx, m.ch))
+		method := m.authOptions[m.authCursor].method
+		if method == config.AuthInteractive {
+			m.cfg.AuthMethod = method
+			m.goTo(screenConnecting)
+			return m, tea.Batch(connect(m.ctx, m.cfg, m.ch), listen(m.ctx, m.ch))
+		}
+		return m.startAuthForm(method)
 	}
 	return m, nil
 }
@@ -517,7 +518,7 @@ func (m model) keyPolicyView(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) keySettings(key string) (tea.Model, tea.Cmd) {
-	const items = 3 // include assignments, retention days, auth method
+	const items = 2 // include assignments, retention days
 	switch key {
 	case "up", "k":
 		if m.settingsCursor > 0 {
@@ -528,15 +529,8 @@ func (m model) keySettings(key string) (tea.Model, tea.Cmd) {
 			m.settingsCursor++
 		}
 	case " ", "space", "enter":
-		switch m.settingsCursor {
-		case 0:
+		if m.settingsCursor == 0 {
 			m.cfg.IncludeAssignments = !m.cfg.IncludeAssignments
-		case 2:
-			if m.cfg.AuthMethod == config.AuthDeviceCode {
-				m.cfg.AuthMethod = config.AuthInteractive
-			} else {
-				m.cfg.AuthMethod = config.AuthDeviceCode
-			}
 		}
 		_ = config.Save(m.cfg)
 		m.status, m.statusKind = "Settings saved", "ok"
