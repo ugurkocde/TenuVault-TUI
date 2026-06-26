@@ -77,8 +77,12 @@ func Default() Config {
 	}
 }
 
-// Path returns the on-disk config location.
+// Path returns the on-disk config location. TENUVAULT_CONFIG_DIR overrides the
+// directory (used to relocate config and to isolate tests from the real file).
 func Path() string {
+	if d := os.Getenv("TENUVAULT_CONFIG_DIR"); d != "" {
+		return filepath.Join(d, "config.json")
+	}
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		dir = os.TempDir()

@@ -49,7 +49,7 @@ func (m model) render() string {
 	case screenSettings:
 		body, hints = m.viewSettings(w), "↑/↓ move · space toggle · ←/→ adjust · esc back"
 	case screenConnections:
-		body, hints = m.viewConnections(w), "↑/↓ move · enter use · a add · esc back"
+		body, hints = m.viewConnections(w), "↑/↓ move · enter use · a add · x remove · esc back"
 	case screenSyncSource:
 		body, hints = m.viewSyncSource(w), "↑/↓ move · enter pick · esc back"
 	case screenSyncSelect:

@@ -78,6 +78,33 @@ func (m model) keyConnections(key string) (tea.Model, tea.Cmd) {
 	case "a":
 		m.addingConn = true
 		m.goTo(screenAuth)
+	case "x", "d", "delete":
+		if m.connCursor >= len(rows) {
+			return m, nil // the "add" row, nothing to remove
+		}
+		row := rows[m.connCursor]
+		var kept []config.ConnConfig
+		for _, cc := range m.cfg.Connections {
+			if cc.TenantID != row.tenantID {
+				kept = append(kept, cc)
+			}
+		}
+		m.cfg.Connections = kept
+		if row.liveIdx >= 0 {
+			m.conns = append(m.conns[:row.liveIdx], m.conns[row.liveIdx+1:]...)
+			if m.sourceIdx >= len(m.conns) {
+				m.sourceIdx = len(m.conns) - 1
+			}
+			if m.sourceIdx < 0 {
+				m.sourceIdx = 0
+			}
+			m.connected = len(m.conns) > 0
+		}
+		m.persistConnections()
+		if m.connCursor > 0 {
+			m.connCursor--
+		}
+		m.status, m.statusKind = "Removed "+row.label, "ok"
 	case "enter":
 		if m.connCursor == addIdx {
 			m.addingConn = true
