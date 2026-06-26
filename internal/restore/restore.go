@@ -30,16 +30,15 @@ type Result struct {
 	Err   error
 }
 
-// readOnlyKeys are stripped before POSTing a restored policy.
+// readOnlyKeys are stripped before POSTing a restored policy. OData annotations
+// (other than @odata.type) are stripped separately via jsonutil.IsODataAnnotation.
 var readOnlyKeys = map[string]bool{
-	"@odata.context":       true,
 	"id":                   true,
 	"createdDateTime":      true,
 	"lastModifiedDateTime": true,
 	"version":              true,
 	"assignments":          true,
 	"isAssigned":           true,
-	"roleScopeTagIds":      true,
 	"supportsScopeTags":    true,
 }
 
@@ -79,9 +78,17 @@ func Restore(ctx context.Context, c *graph.Client, items []Item) []Result {
 func prepare(category string, raw json.RawMessage) (version, endpoint string, body json.RawMessage, err error) {
 	pt, ok := routeByType(category, raw)
 	if !ok {
+		if category == "AppProtectionPolicies" {
+			return "", "", nil, fmt.Errorf("unrecognized app protection type %q", odataTypeOf(raw))
+		}
 		return "", "", nil, fmt.Errorf("no restore route for category %q", category)
 	}
-	cleaned := jsonutil.StripKeys(mustMap(raw), readOnlyKeys)
+	if !pt.RestoreSupported {
+		return "", "", nil, fmt.Errorf("%s is backup-only; restore is not supported", pt.Friendly)
+	}
+	cleaned := jsonutil.StripKeysFunc(mustMap(raw), func(k string) bool {
+		return readOnlyKeys[k] || jsonutil.IsODataAnnotation(k)
+	})
 	m, _ := cleaned.(map[string]any)
 	if m == nil {
 		m = map[string]any{}
@@ -119,6 +126,9 @@ func routeByType(category string, raw json.RawMessage) (catalog.PolicyType, bool
 				return pt, true
 			}
 			if strings.Contains(odataType, "android") && pt.Key == "androidAppProtection" {
+				return pt, true
+			}
+			if strings.Contains(odataType, "windows") && pt.Key == "windowsAppProtection" {
 				return pt, true
 			}
 			continue

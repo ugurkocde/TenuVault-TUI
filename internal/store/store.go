@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Metadata is the backup manifest, matching the TenuVault portal runbook shape.
@@ -113,4 +114,30 @@ func (b Backup) Policies(category string) ([]PolicyFile, error) {
 // Read returns the raw JSON of a policy file.
 func Read(path string) (json.RawMessage, error) {
 	return os.ReadFile(path)
+}
+
+// Cleanup removes backup folders older than the given number of days, based on
+// the timestamp encoded in the folder name. Returns how many were removed.
+func Cleanup(root string, days int) (int, error) {
+	if days <= 0 {
+		return 0, nil
+	}
+	backups, err := List(root)
+	if err != nil {
+		return 0, err
+	}
+	cutoff := time.Now().AddDate(0, 0, -days)
+	removed := 0
+	for _, b := range backups {
+		ts, err := time.Parse("2006-01-02-150405", strings.TrimPrefix(b.Folder, "backup-"))
+		if err != nil {
+			continue
+		}
+		if ts.Before(cutoff) {
+			if err := os.RemoveAll(b.Path); err == nil {
+				removed++
+			}
+		}
+	}
+	return removed, nil
 }

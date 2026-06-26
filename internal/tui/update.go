@@ -2,10 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/ugurkocde/TenuVault-TUI/internal/backup"
 	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
+	"github.com/ugurkocde/TenuVault-TUI/internal/config"
 	"github.com/ugurkocde/TenuVault-TUI/internal/restore"
 	"github.com/ugurkocde/TenuVault-TUI/internal/store"
 )
@@ -58,8 +61,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				total += c
 			}
 			m.progResult = fmt.Sprintf("%d policies in %s", total, msg.res.Folder)
+			m.progStatus = msg.res.Status
+			m.progCats = msg.res.Categories
 		}
-		return m, loadBackups(m.cfg.BackupRoot)
+		var cmds []tea.Cmd
+		cmds = append(cmds, loadBackups(m.cfg.BackupRoot))
+		if m.cfg.RetentionDays > 0 {
+			cmds = append(cmds, cleanupBackups(m.cfg.BackupRoot, m.cfg.RetentionDays))
+		}
+		return m, tea.Batch(cmds...)
 
 	case restoreDoneMsg:
 		m.restoreResults = msg.results
@@ -133,6 +143,12 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.keyBrowse(key)
 	case screenBrowseDetail:
 		return m.keyBrowseDetail(key)
+	case screenCategoryPolicies:
+		return m.keyCategoryPolicies(key)
+	case screenPolicyView:
+		return m.keyPolicyView(key)
+	case screenSettings:
+		return m.keySettings(key)
 	case screenDiffResult:
 		return m.keyDiffResult(key)
 	case screenRestorePick:
@@ -179,7 +195,7 @@ func (m model) keyAuth(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) keyDashboard(key string) (tea.Model, tea.Cmd) {
-	const items = 4
+	const items = 5
 	switch key {
 	case "up", "k":
 		if m.dashCursor > 0 {
@@ -199,6 +215,9 @@ func (m model) keyDashboard(key string) (tea.Model, tea.Cmd) {
 		return m.openBrowse(modeDiffA, "Compare · pick baseline (older)")
 	case "r":
 		return m.openBrowse(modeRestore, "Restore · pick a backup")
+	case "s":
+		m.settingsCursor = 0
+		m.goTo(screenSettings)
 	case "enter":
 		switch m.dashCursor {
 		case 0:
@@ -209,6 +228,9 @@ func (m model) keyDashboard(key string) (tea.Model, tea.Cmd) {
 			return m.openBrowse(modeDiffA, "Compare · pick baseline (older)")
 		case 3:
 			return m.openBrowse(modeRestore, "Restore · pick a backup")
+		case 4:
+			m.settingsCursor = 0
+			m.goTo(screenSettings)
 		}
 	}
 	return m, nil
@@ -271,8 +293,10 @@ func (m model) keyBackupSelect(key string) (tea.Model, tea.Cmd) {
 		m.progOrder = nil
 		m.progActive, m.progCur, m.progTot = "", 0, 0
 		m.progDone, m.progErr, m.progResult = false, nil, ""
+		m.progStatus, m.progCats = "", nil
 		m.goTo(screenProgress)
-		return m, tea.Batch(runBackup(m.ctx, m.client, types, m.cfg.BackupRoot, m.tenant, m.ch), listen(m.ctx, m.ch))
+		opts := backup.Options{Root: m.cfg.BackupRoot, Tenant: m.tenant, IncludeAssignments: m.cfg.IncludeAssignments}
+		return m, tea.Batch(runBackup(m.ctx, m.client, types, opts, m.ch), listen(m.ctx, m.ch))
 	}
 	return m, nil
 }
@@ -321,6 +345,21 @@ func (m model) keyBrowse(key string) (tea.Model, tea.Cmd) {
 
 func (m model) keyBrowseDetail(key string) (tea.Model, tea.Cmd) {
 	switch key {
+	case "up", "k":
+		if m.detailCursor > 0 {
+			m.detailCursor--
+		}
+	case "down", "j":
+		if m.detailCursor < len(m.detailCats)-1 {
+			m.detailCursor++
+		}
+	case "enter":
+		if m.detail != nil && len(m.detailCats) > 0 {
+			m.catName = m.detailCats[m.detailCursor].name
+			m.catPolicies, _ = m.detail.Policies(m.catName)
+			m.policyCursor = 0
+			m.goTo(screenCategoryPolicies)
+		}
 	case "esc":
 		m.goTo(screenBrowse)
 	case "q":
@@ -333,6 +372,88 @@ func (m model) keyBrowseDetail(key string) (tea.Model, tea.Cmd) {
 			m.restoreCursor, m.restoreScroll = 0, 0
 			m.goTo(screenRestorePick)
 		}
+	}
+	return m, nil
+}
+
+func (m model) keyCategoryPolicies(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "up", "k":
+		if m.policyCursor > 0 {
+			m.policyCursor--
+		}
+	case "down", "j":
+		if m.policyCursor < len(m.catPolicies)-1 {
+			m.policyCursor++
+		}
+	case "enter":
+		if len(m.catPolicies) > 0 {
+			raw, err := store.Read(m.catPolicies[m.policyCursor].Path)
+			if err == nil {
+				m.policyLines = strings.Split(string(raw), "\n")
+			} else {
+				m.policyLines = []string{"could not read file: " + err.Error()}
+			}
+			m.policyScroll = 0
+			m.goTo(screenPolicyView)
+		}
+	case "esc", "q":
+		m.goTo(screenBrowseDetail)
+	}
+	return m, nil
+}
+
+func (m model) keyPolicyView(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "up", "k":
+		if m.policyScroll > 0 {
+			m.policyScroll--
+		}
+	case "down", "j":
+		if m.policyScroll < len(m.policyLines)-1 {
+			m.policyScroll++
+		}
+	case "esc", "q":
+		m.goTo(screenCategoryPolicies)
+	}
+	return m, nil
+}
+
+func (m model) keySettings(key string) (tea.Model, tea.Cmd) {
+	const items = 3 // include assignments, retention days, auth method
+	switch key {
+	case "up", "k":
+		if m.settingsCursor > 0 {
+			m.settingsCursor--
+		}
+	case "down", "j":
+		if m.settingsCursor < items-1 {
+			m.settingsCursor++
+		}
+	case " ", "space", "enter":
+		switch m.settingsCursor {
+		case 0:
+			m.cfg.IncludeAssignments = !m.cfg.IncludeAssignments
+		case 2:
+			if m.cfg.AuthMethod == config.AuthDeviceCode {
+				m.cfg.AuthMethod = config.AuthInteractive
+			} else {
+				m.cfg.AuthMethod = config.AuthDeviceCode
+			}
+		}
+		_ = config.Save(m.cfg)
+	case "+", "=", "right", "l":
+		if m.settingsCursor == 1 {
+			m.cfg.RetentionDays++
+			_ = config.Save(m.cfg)
+		}
+	case "-", "left", "h":
+		if m.settingsCursor == 1 && m.cfg.RetentionDays > 0 {
+			m.cfg.RetentionDays--
+			_ = config.Save(m.cfg)
+		}
+	case "esc", "q":
+		m.goTo(screenDashboard)
 	}
 	return m, nil
 }
@@ -417,11 +538,15 @@ func scanCategories(b store.Backup) []catCount {
 	return out
 }
 
-// buildRestoreItems flattens all policies in a backup into restore items.
+// buildRestoreItems flattens restorable policies in a backup into restore items,
+// skipping backup-only categories (apps, admin templates, intents, enrollment).
 func buildRestoreItems(b store.Backup) []restoreSel {
 	cats, _ := b.Categories()
 	var out []restoreSel
 	for _, c := range cats {
+		if !catalog.CategoryRestoreSupported(c) {
+			continue
+		}
 		files, _ := b.Policies(c)
 		for _, f := range files {
 			out = append(out, restoreSel{item: restore.Item{Category: c, Name: f.Name, Path: f.Path}})

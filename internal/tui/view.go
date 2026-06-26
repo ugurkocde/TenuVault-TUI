@@ -7,6 +7,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
+	"github.com/ugurkocde/TenuVault-TUI/internal/config"
 	"github.com/ugurkocde/TenuVault-TUI/internal/diff"
 )
 
@@ -35,7 +36,13 @@ func (m model) render() string {
 	case screenBrowse:
 		body, hints = m.viewBrowse(w)
 	case screenBrowseDetail:
-		body, hints = m.viewBrowseDetail(w), "r restore · esc back · q dashboard"
+		body, hints = m.viewBrowseDetail(w), "↑/↓ move · enter open · r restore · esc back"
+	case screenCategoryPolicies:
+		body, hints = m.viewCategoryPolicies(w), "↑/↓ move · enter view JSON · esc back"
+	case screenPolicyView:
+		body, hints = m.viewPolicyView(w), "↑/↓ scroll · esc back"
+	case screenSettings:
+		body, hints = m.viewSettings(w), "↑/↓ move · space toggle · ←/→ adjust · esc back"
 	case screenDiffResult:
 		body, hints = m.viewDiffResult(w), "↑/↓ scroll · esc back"
 	case screenRestorePick:
@@ -134,6 +141,7 @@ func (m model) viewDashboard(w int) string {
 		{"Browse backups", "l"},
 		{"Compare / drift", "d"},
 		{"Restore policies", "r"},
+		{"Settings", "s"},
 	}
 	var mb strings.Builder
 	mb.WriteString(m.th.cardLabel.Render("Quick actions") + "\n")
@@ -152,25 +160,45 @@ func (m model) viewDashboard(w int) string {
 
 func (m model) viewBackupSelect(w int) string {
 	var b strings.Builder
-	b.WriteString(m.th.crumb.Render("Dashboard › Back up now") + "\n\n")
+	b.WriteString(m.th.crumb.Render("Dashboard › Back up now") + "  " +
+		m.th.cardLabel.Render(fmt.Sprintf("(%d/%d)", m.catCursor+1, len(m.cats))) + "\n\n")
+
 	selected := 0
-	for i, c := range m.cats {
+	for _, c := range m.cats {
+		if c.sel {
+			selected++
+		}
+	}
+
+	// Window the long list around the cursor; print group headers inline.
+	start, end := window(m.catCursor, len(m.cats), 16)
+	lastGroup := ""
+	for i := start; i < end; i++ {
+		c := m.cats[i]
+		if c.pt.Group != lastGroup {
+			if lastGroup != "" {
+				b.WriteString("\n")
+			}
+			b.WriteString(m.th.cardLabel.Render(c.pt.Group) + "\n")
+			lastGroup = c.pt.Group
+		}
 		box := m.th.dim.Render("[ ]")
 		if c.sel {
 			box = m.th.success.Render("[x]")
-			selected++
 		}
 		label := m.th.normal.Render(c.pt.Friendly)
 		if i == m.catCursor {
 			label = m.th.selected.Render(c.pt.Friendly)
 		}
 		tag := ""
-		if !c.pt.Verified {
+		if !c.pt.RestoreSupported {
+			tag = "  " + m.th.cardLabel.Render("· backup-only")
+		} else if !c.pt.Verified {
 			tag = "  " + m.th.cardLabel.Render("· unverified")
 		}
-		b.WriteString(box + " " + label + tag + "\n")
+		b.WriteString("  " + box + " " + label + tag + "\n")
 	}
-	b.WriteString("\n" + m.th.accent.Render(fmt.Sprintf("%d categories selected", selected)))
+	b.WriteString("\n" + m.th.accent.Render(fmt.Sprintf("%d of %d selected", selected, len(m.cats))))
 	b.WriteString("  " + m.th.cardLabel.Render("→ "+m.cfg.BackupRoot))
 	return b.String()
 }
@@ -202,8 +230,22 @@ func (m model) viewProgress(w int) (string, string) {
 	}
 	if m.progErr != nil {
 		b.WriteString("  " + m.th.danger.Render("Backup failed: "+m.progErr.Error()) + "\n")
-	} else {
+		return b.String(), "enter continue"
+	}
+	switch m.progStatus {
+	case "Failed":
+		b.WriteString("  " + m.th.danger.Render("✗ Backup failed · "+m.progResult) + "\n")
+	case "CompletedWithWarnings":
+		b.WriteString("  " + m.th.warn.Render("⚠ Completed with warnings · "+m.progResult) + "\n")
+	default:
 		b.WriteString("  " + m.th.success.Render("✔ Backup complete · "+m.progResult) + "\n")
+	}
+	for _, c := range m.progCats {
+		if c.Failed {
+			b.WriteString("    " + m.th.danger.Render("✗ "+c.Category) + " " + m.th.dim.Render(trunc(c.Error, 60)) + "\n")
+		} else if c.Warnings > 0 {
+			b.WriteString("    " + m.th.warn.Render(fmt.Sprintf("⚠ %s — %d saved, %d incomplete", c.Category, c.Count, c.Warnings)) + "\n")
+		}
 	}
 	return b.String(), "enter continue"
 }
@@ -246,10 +288,91 @@ func (m model) viewBrowseDetail(w int) string {
 		b.WriteString(m.th.dim.Render("tenant "+m.detail.Meta.TenantName) + "\n")
 	}
 	b.WriteString("\n")
-	for _, c := range m.detailCats {
-		b.WriteString(spread("  "+m.th.normal.Render(c.name), m.th.accent.Render(fmt.Sprintf("%d", c.count)), w/2) + "\n")
+	for i, c := range m.detailCats {
+		label := m.th.normal.Render(c.name)
+		marker := "  "
+		if i == m.detailCursor {
+			label = m.th.selected.Render(c.name)
+			marker = m.th.selected.Render("▸ ")
+		}
+		b.WriteString(spread(marker+label, m.th.accent.Render(fmt.Sprintf("%d", c.count)), w/2) + "\n")
 	}
 	return b.String()
+}
+
+func (m model) viewCategoryPolicies(w int) string {
+	var b strings.Builder
+	b.WriteString(m.th.crumb.Render("Browse › "+m.catName) + "\n\n")
+	if len(m.catPolicies) == 0 {
+		b.WriteString(m.th.dim.Render("No policies in this category."))
+		return b.String()
+	}
+	start, end := window(m.policyCursor, len(m.catPolicies), 14)
+	for i := start; i < end; i++ {
+		p := m.catPolicies[i]
+		marker := "  "
+		name := m.th.normal.Render(p.Name)
+		if i == m.policyCursor {
+			marker = m.th.selected.Render("▸ ")
+			name = m.th.selected.Render(p.Name)
+		}
+		b.WriteString(marker + name + "\n")
+	}
+	return b.String()
+}
+
+func (m model) viewPolicyView(w int) string {
+	var b strings.Builder
+	name := ""
+	if len(m.catPolicies) > 0 && m.policyCursor < len(m.catPolicies) {
+		name = m.catPolicies[m.policyCursor].Name
+	}
+	b.WriteString(m.th.crumb.Render(m.catName+" › "+name) + "\n\n")
+	if len(m.policyLines) == 0 {
+		b.WriteString(m.th.dim.Render("(empty)"))
+		return b.String()
+	}
+	size := 18
+	start, end := m.policyScroll, m.policyScroll+size
+	if end > len(m.policyLines) {
+		end = len(m.policyLines)
+	}
+	for i := start; i < end; i++ {
+		b.WriteString(m.th.dim.Render(m.policyLines[i]) + "\n")
+	}
+	b.WriteString("\n" + m.th.cardLabel.Render(fmt.Sprintf("lines %d–%d of %d", start+1, end, len(m.policyLines))))
+	return b.String()
+}
+
+func (m model) viewSettings(w int) string {
+	var b strings.Builder
+	b.WriteString(m.th.crumb.Render("Settings") + "\n\n")
+	rows := []struct {
+		label, value string
+	}{
+		{"Include assignments in backups", onOff(m.cfg.IncludeAssignments)},
+		{"Retention (days, 0 = keep all)", fmt.Sprintf("%d", m.cfg.RetentionDays)},
+		{"Sign-in method", string(m.cfg.AuthMethod)},
+	}
+	for i, r := range rows {
+		marker := "  "
+		label := m.th.normal.Render(r.label)
+		if i == m.settingsCursor {
+			marker = m.th.selected.Render("▸ ")
+			label = m.th.selected.Render(r.label)
+		}
+		b.WriteString(spread(marker+label, m.th.accent.Render(r.value), min(w, 70)) + "\n")
+	}
+	b.WriteString("\n" + m.th.cardLabel.Render("backups → "+m.cfg.BackupRoot))
+	b.WriteString("\n" + m.th.cardLabel.Render("config  → "+config.Path()))
+	return b.String()
+}
+
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
 }
 
 func (m model) viewDiffResult(w int) string {

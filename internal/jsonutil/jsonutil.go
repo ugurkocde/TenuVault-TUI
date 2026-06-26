@@ -49,28 +49,44 @@ func DisplayName(raw json.RawMessage, field string) string {
 	return ""
 }
 
-// StripKeys returns a copy of v with the named keys removed recursively. Used to
-// drop API noise and read-only fields before comparing or restoring.
-func StripKeys(v any, keys map[string]bool) any {
+// StripKeysFunc returns a copy of v with every key for which drop returns true
+// removed recursively.
+func StripKeysFunc(v any, drop func(string) bool) any {
 	switch t := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, val := range t {
-			if keys[k] {
+			if drop(k) {
 				continue
 			}
-			out[k] = StripKeys(val, keys)
+			out[k] = StripKeysFunc(val, drop)
 		}
 		return out
 	case []any:
 		out := make([]any, len(t))
 		for i, val := range t {
-			out[i] = StripKeys(val, keys)
+			out[i] = StripKeysFunc(val, drop)
 		}
 		return out
 	default:
 		return v
 	}
+}
+
+// StripKeys returns a copy of v with the named keys removed recursively. Used to
+// drop API noise and read-only fields before comparing or restoring.
+func StripKeys(v any, keys map[string]bool) any {
+	return StripKeysFunc(v, func(k string) bool { return keys[k] })
+}
+
+// IsODataAnnotation reports whether a key is an OData annotation that must be
+// dropped before a write (e.g. "@odata.context", "x@odata.navigationLink"),
+// while preserving "@odata.type" which Graph needs for polymorphic creates.
+func IsODataAnnotation(key string) bool {
+	if key == "@odata.type" {
+		return false
+	}
+	return strings.Contains(key, "@odata.")
 }
 
 // Normalize parses raw JSON and strips the given keys for comparison.

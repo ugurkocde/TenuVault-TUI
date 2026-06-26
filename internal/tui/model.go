@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/ugurkocde/TenuVault-TUI/internal/backup"
 	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
 	"github.com/ugurkocde/TenuVault-TUI/internal/config"
 	"github.com/ugurkocde/TenuVault-TUI/internal/diff"
@@ -25,10 +26,13 @@ const (
 	screenProgress
 	screenBrowse
 	screenBrowseDetail
+	screenCategoryPolicies
+	screenPolicyView
 	screenDiffResult
 	screenRestorePick
 	screenRestoreConfirm
 	screenRestoreResult
+	screenSettings
 	screenError
 )
 
@@ -113,6 +117,8 @@ type model struct {
 	progTot        int
 	progDone       bool
 	progResult     string
+	progStatus     string
+	progCats       []backup.CategoryResult
 	progErr        error
 	restoreRunning bool
 
@@ -123,8 +129,17 @@ type model struct {
 	browseTitle  string
 
 	// detail
-	detail     *store.Backup
-	detailCats []catCount
+	detail       *store.Backup
+	detailCats   []catCount
+	detailCursor int
+	catName      string
+	catPolicies  []store.PolicyFile
+	policyCursor int
+	policyLines  []string
+	policyScroll int
+
+	// settings
+	settingsCursor int
 
 	// diff
 	diffA       *store.Backup

@@ -12,13 +12,35 @@ Built with Go and the [Charm](https://charm.land) stack (Bubble Tea, Lip Gloss).
 - Interactive browser or device-code sign-in (delegated permissions; no app
   registration needed). Client secret and certificate flows are supported for
   unattended use.
-- Backs up Intune policy types to per-policy JSON files plus a `metadata.json`
-  manifest, in a layout cross-compatible with the TenuVault portal.
-- Browse local backups, drill into categories, and compare any two backups for
-  configuration drift with severity highlighting.
+- Backs up 28 Intune policy types to per-policy JSON files plus a
+  `metadata.json` manifest and a `backup.log`, in a layout cross-compatible with
+  the TenuVault portal. Script content, settings-catalog settings, admin-template
+  definition values, and security-baseline intent settings are fetched in full.
+- Optional capture of assignments alongside each policy.
+- Every category's outcome is surfaced: a backup reports `Success`,
+  `CompletedWithWarnings`, or `Failed`, and lists exactly which categories failed
+  and why (e.g. a missing Graph scope) — no silent drops.
+- Browse local backups, drill into categories, inspect any policy's JSON, and
+  compare any two backups for configuration drift with severity highlighting.
 - Restore selected policies back to Graph with a dry-run preview, an explicit
   confirmation, and a `[Restored]` name prefix so nothing is overwritten.
-- Conditional Access policies are restored disabled by default.
+  Conditional Access policies are restored disabled by default.
+- Settings for assignment capture, backup retention, and sign-in method.
+
+## Coverage
+
+Configuration (device configurations, settings catalog, administrative
+templates, compliance, endpoint security baselines), scripts (Windows, macOS
+shell, proactive remediations, custom attributes), enrollment and updates
+(Autopilot, enrollment configurations, feature/quality/driver updates), tenant
+administration (scope tags, device categories, terms and conditions,
+notification templates, assignment filters), apps (apps, app configuration,
+app protection for iOS/Android/Windows, Windows information protection, app
+categories), and conditional access.
+
+Apps, administrative templates, security-baseline intents, and enrollment
+configurations are backup-only (they require content upload or multi-part
+creates and are excluded from restore for safety).
 
 ## Install
 
@@ -68,7 +90,12 @@ delegated permissions cover both. The relevant scopes are:
 - `DeviceManagementConfiguration.ReadWrite.All`
 - `DeviceManagementApps.ReadWrite.All`
 - `DeviceManagementServiceConfig.ReadWrite.All`
+- `DeviceManagementScripts.ReadWrite.All`
+- `DeviceManagementRBAC.ReadWrite.All` (scope tags)
 - `Policy.ReadWrite.ConditionalAccess`
+
+If a scope is missing, the affected category is reported as failed on the backup
+summary with the exact Graph error, so you can see what to consent.
 
 ## Configuration
 

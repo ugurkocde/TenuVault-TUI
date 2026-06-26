@@ -81,10 +81,10 @@ func connect(ctx context.Context, cfg config.Config, ch chan tea.Msg) tea.Cmd {
 }
 
 // runBackup streams progress events and a final done message through ch.
-func runBackup(ctx context.Context, c *graph.Client, types []catalog.PolicyType, root string, tenant graph.Tenant, ch chan tea.Msg) tea.Cmd {
+func runBackup(ctx context.Context, c *graph.Client, types []catalog.PolicyType, opts backup.Options, ch chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		go func() {
-			res, err := backup.Run(ctx, c, types, root, tenant, func(e backup.Event) {
+			res, err := backup.Run(ctx, c, types, opts, func(e backup.Event) {
 				send(ctx, ch, backupEventMsg(e))
 			})
 			send(ctx, ch, backupDoneMsg{res: res, err: err})
@@ -112,6 +112,14 @@ func loadBackups(root string) tea.Cmd {
 			return errMsg{err}
 		}
 		return backupsLoadedMsg(backups)
+	}
+}
+
+// cleanupBackups deletes backups older than the retention window.
+func cleanupBackups(root string, days int) tea.Cmd {
+	return func() tea.Msg {
+		_, _ = store.Cleanup(root, days)
+		return nil
 	}
 }
 

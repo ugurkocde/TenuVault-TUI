@@ -29,6 +29,10 @@ type Config struct {
 	AuthMethod AuthMethod `json:"authMethod"`
 	BackupRoot string     `json:"backupRoot"`
 
+	// Behavior toggles.
+	IncludeAssignments bool `json:"includeAssignments"`
+	RetentionDays      int  `json:"retentionDays"`
+
 	// Optional unattended credentials (read from config or env; never required).
 	ClientSecret    string `json:"clientSecret,omitempty"`
 	CertificatePath string `json:"certificatePath,omitempty"`

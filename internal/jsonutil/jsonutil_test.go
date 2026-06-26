@@ -48,3 +48,18 @@ func TestDisplayName(t *testing.T) {
 		t.Errorf("fallback failed, got %q", got)
 	}
 }
+
+func TestIsODataAnnotation(t *testing.T) {
+	drop := []string{"@odata.context", "authenticationStrength@odata.context", "x@odata.navigationLink"}
+	for _, k := range drop {
+		if !IsODataAnnotation(k) {
+			t.Errorf("%q should be dropped", k)
+		}
+	}
+	if IsODataAnnotation("@odata.type") {
+		t.Error("@odata.type must be preserved")
+	}
+	if IsODataAnnotation("displayName") {
+		t.Error("displayName must be kept")
+	}
+}

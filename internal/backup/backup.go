@@ -1,6 +1,9 @@
 // Package backup enumerates and writes Intune policies to a TenuVault-format
 // backup folder. It preserves verbatim Graph JSON (only dropping @odata.context)
-// so policies restore cleanly, and writes a metadata.json manifest.
+// so policies restore cleanly, fetches per-item detail and nested sub-resources
+// where required (script content, settings catalog settings, admin-template
+// definition values, etc.), and writes a metadata.json manifest plus a
+// backup.log that records the outcome of every category.
 package backup
 
 import (
@@ -10,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
@@ -21,6 +25,13 @@ import (
 // RunbookVersion is recorded in the manifest for portal cross-compatibility.
 const RunbookVersion = "tui-1.0.0"
 
+// Options configures a backup run.
+type Options struct {
+	Root               string
+	Tenant             graph.Tenant
+	IncludeAssignments bool
+}
+
 // Event reports backup progress for one category, suitable for a TUI.
 type Event struct {
 	Category string
@@ -28,42 +39,75 @@ type Event struct {
 	Current  int
 	Total    int
 	Done     bool
+	Failed   bool // category-level list failure
 	Err      error
+}
+
+// CategoryResult is the per-category outcome recorded in the manifest/log.
+type CategoryResult struct {
+	Category string `json:"category"`
+	Friendly string `json:"friendly"`
+	Count    int    `json:"count"`
+	Warnings int    `json:"warnings"`
+	Failed   bool   `json:"failed"`
+	Error    string `json:"error,omitempty"`
 }
 
 // Result summarizes a completed backup.
 type Result struct {
 	Folder     string
 	Path       string
+	Status     string
 	ItemCounts map[string]int
+	Categories []CategoryResult
 }
 
-// Run backs up the selected policy types into root, emitting progress events.
-func Run(ctx context.Context, c *graph.Client, types []catalog.PolicyType, root string, tenant graph.Tenant, progress func(Event)) (Result, error) {
+// Run backs up the selected policy types into the configured root, emitting
+// progress events. It never aborts the whole run on a single category failure;
+// each category's outcome is captured in the result and the on-disk log.
+func Run(ctx context.Context, c *graph.Client, types []catalog.PolicyType, opts Options, progress func(Event)) (Result, error) {
 	start := time.Now()
 	folder := "backup-" + start.Format("2006-01-02-150405")
-	path := filepath.Join(root, folder)
+	path := filepath.Join(opts.Root, folder)
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return Result{}, fmt.Errorf("create backup folder: %w", err)
 	}
 
 	counts := map[string]int{}
-	warnings := 0
+	catResults := map[string]*CategoryResult{}
+	var order []string
 	emit := func(e Event) {
 		if progress != nil {
 			progress(e)
 		}
 	}
+	result := func(pt catalog.PolicyType) *CategoryResult {
+		if r, ok := catResults[pt.Category]; ok {
+			return r
+		}
+		r := &CategoryResult{Category: pt.Category, Friendly: pt.Friendly}
+		catResults[pt.Category] = r
+		order = append(order, pt.Category)
+		return r
+	}
 
 	for _, pt := range types {
+		cr := result(pt)
 		items, err := c.ListAll(ctx, pt.Version, pt.ListPath, nil)
 		if err != nil {
-			emit(Event{Category: pt.Category, Friendly: pt.Friendly, Err: err, Done: true})
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return Result{}, ctxErr
+			}
+			cr.Failed = true
+			cr.Error = condense(err.Error())
+			emit(Event{Category: pt.Category, Friendly: pt.Friendly, Err: err, Failed: true, Done: true})
 			continue
 		}
 		catDir := filepath.Join(path, pt.Category)
 		if err := os.MkdirAll(catDir, 0o755); err != nil {
-			emit(Event{Category: pt.Category, Friendly: pt.Friendly, Err: err, Done: true})
+			cr.Failed = true
+			cr.Error = condense(err.Error())
+			emit(Event{Category: pt.Category, Friendly: pt.Friendly, Err: err, Failed: true, Done: true})
 			continue
 		}
 		total := len(items)
@@ -71,38 +115,45 @@ func Run(ctx context.Context, c *graph.Client, types []catalog.PolicyType, root 
 			if err := ctx.Err(); err != nil {
 				return Result{}, err
 			}
-			full := item
-			if pt.Expand != "" {
-				if id := itemID(item); id != "" {
-					q := url.Values{"$expand": {pt.Expand}}
-					detail, err := c.Get(ctx, pt.Version, pt.ListPath+"/"+id, q)
-					if err != nil {
-						// Expanded detail (e.g. settings catalog settings) is the
-						// substance of the policy; if it can't be fetched, record
-						// a warning instead of silently writing a hollow item.
-						warnings++
-						emit(Event{Category: pt.Category, Friendly: pt.Friendly, Err: err})
-					} else {
-						full = detail
-					}
-				}
+			full, warn := enrich(ctx, c, pt, item, opts.IncludeAssignments)
+			if warn {
+				cr.Warnings++
+				emit(Event{Category: pt.Category, Friendly: pt.Friendly, Err: fmt.Errorf("incomplete detail"), Current: i + 1, Total: total})
 			}
 			name := jsonutil.DisplayName(full, pt.NameField)
 			if err := writePolicy(catDir, name, full); err != nil {
-				emit(Event{Category: pt.Category, Friendly: pt.Friendly, Err: err})
+				cr.Warnings++
 				continue
 			}
 			counts[pt.Category]++
+			cr.Count++
 			emit(Event{Category: pt.Category, Friendly: pt.Friendly, Current: i + 1, Total: total})
 		}
 		emit(Event{Category: pt.Category, Friendly: pt.Friendly, Current: total, Total: total, Done: true})
 	}
 
-	end := time.Now()
+	// Determine overall status.
+	failed, warned := 0, 0
+	var catList []CategoryResult
+	for _, cat := range order {
+		r := catResults[cat]
+		catList = append(catList, *r)
+		switch {
+		case r.Failed:
+			failed++
+		case r.Warnings > 0:
+			warned++
+		}
+	}
 	status := "Success"
-	if warnings > 0 {
+	switch {
+	case failed > 0 && failed == len(order):
+		status = "Failed"
+	case failed > 0 || warned > 0:
 		status = "CompletedWithWarnings"
 	}
+
+	end := time.Now()
 	meta := store.Metadata{
 		BackupDate:      start.Format("2006-01-02-150405"),
 		BackupFolder:    folder,
@@ -114,29 +165,100 @@ func Run(ctx context.Context, c *graph.Client, types []catalog.PolicyType, root 
 		Status:          status,
 		RunbookVersion:  RunbookVersion,
 		BackupFormat:    "Individual policy files with Intune-compatible JSON",
-		TenantID:        tenant.ID,
-		TenantName:      tenant.DisplayName,
+		TenantID:        opts.Tenant.ID,
+		TenantName:      opts.Tenant.DisplayName,
 	}
 	if err := writeMetadata(path, meta); err != nil {
 		return Result{}, err
 	}
-	return Result{Folder: folder, Path: path, ItemCounts: counts}, nil
+	writeLog(path, meta, catList)
+
+	return Result{Folder: folder, Path: path, Status: status, ItemCounts: counts, Categories: catList}, nil
 }
 
-// noiseKeys are API artifacts dropped before writing (item still restores).
+// enrich fetches per-item detail, nested sub-resources, and (optionally)
+// assignments. It returns the enriched JSON and whether anything was missing.
+func enrich(ctx context.Context, c *graph.Client, pt catalog.PolicyType, item json.RawMessage, includeAssignments bool) (json.RawMessage, bool) {
+	full := item
+	warn := false
+	id := itemID(item)
+
+	if pt.DetailByID && id != "" {
+		var q url.Values
+		if pt.Expand != "" {
+			q = url.Values{"$expand": {pt.Expand}}
+		}
+		if detail, err := c.Get(ctx, pt.Version, pt.ListPath+"/"+id, q); err == nil {
+			full = detail
+		} else {
+			warn = true
+		}
+	}
+
+	if pt.Sub != nil && id != "" {
+		var q url.Values
+		if pt.Sub.Expand != "" {
+			q = url.Values{"$expand": {pt.Sub.Expand}}
+		}
+		if vals, err := c.ListAll(ctx, pt.Version, pt.ListPath+"/"+id+"/"+pt.Sub.Suffix, q); err == nil {
+			full = embed(full, pt.Sub.EmbedKey, vals)
+		} else {
+			warn = true
+		}
+	}
+
+	if includeAssignments && id != "" && supportsAssignments(pt) {
+		if vals, err := c.ListAll(ctx, pt.Version, pt.ListPath+"/"+id+"/assignments", nil); err == nil {
+			full = embed(full, "assignments", vals)
+		}
+	}
+	return full, warn
+}
+
+// supportsAssignments reports whether a type exposes an /assignments collection.
+func supportsAssignments(pt catalog.PolicyType) bool {
+	if !strings.HasPrefix(pt.ListPath, "/deviceManagement/") && !strings.HasPrefix(pt.ListPath, "/deviceAppManagement/") {
+		return false
+	}
+	switch pt.Key {
+	case "roleScopeTags", "deviceCategories", "notificationTemplates", "appCategories", "assignmentFilters":
+		return false
+	}
+	return true
+}
+
+// embed inserts a sub-resource value array into the policy JSON under key.
+func embed(raw json.RawMessage, key string, vals []json.RawMessage) json.RawMessage {
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return raw
+	}
+	arr := make([]any, 0, len(vals))
+	for _, v := range vals {
+		var x any
+		if err := json.Unmarshal(v, &x); err == nil {
+			arr = append(arr, x)
+		}
+	}
+	m[key] = arr
+	if out, err := json.Marshal(m); err == nil {
+		return out
+	}
+	return raw
+}
+
 var noiseKeys = map[string]bool{"@odata.context": true}
 
 func writePolicy(dir, name string, raw json.RawMessage) error {
 	cleaned, err := jsonutil.Normalize(raw, noiseKeys)
 	if err != nil {
-		cleaned = raw // fall back to verbatim
+		cleaned = raw
 	}
 	data, err := json.MarshalIndent(cleaned, "", "  ")
 	if err != nil {
 		return err
 	}
-	file := filepath.Join(dir, jsonutil.SanitizeFilename(name)+".json")
-	file = uniquePath(file)
+	file := uniquePath(filepath.Join(dir, jsonutil.SanitizeFilename(name)+".json"))
 	return os.WriteFile(file, data, 0o644)
 }
 
@@ -148,12 +270,40 @@ func writeMetadata(dir string, m store.Metadata) error {
 	return os.WriteFile(filepath.Join(dir, "metadata.json"), data, 0o644)
 }
 
+// writeLog records a human-readable per-category outcome next to the backup.
+func writeLog(dir string, m store.Metadata, cats []CategoryResult) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "TenuVault backup %s\n", m.BackupFolder)
+	fmt.Fprintf(&b, "tenant: %s (%s)\n", m.TenantName, m.TenantID)
+	fmt.Fprintf(&b, "status: %s\n\n", m.Status)
+	for _, c := range cats {
+		switch {
+		case c.Failed:
+			fmt.Fprintf(&b, "FAILED   %-32s %s\n", c.Category, c.Error)
+		case c.Warnings > 0:
+			fmt.Fprintf(&b, "WARN     %-32s %d saved, %d incomplete\n", c.Category, c.Count, c.Warnings)
+		default:
+			fmt.Fprintf(&b, "ok       %-32s %d saved\n", c.Category, c.Count)
+		}
+	}
+	_ = os.WriteFile(filepath.Join(dir, "backup.log"), []byte(b.String()), 0o644)
+}
+
 func itemID(raw json.RawMessage) string {
 	var m struct {
 		ID string `json:"id"`
 	}
 	_ = json.Unmarshal(raw, &m)
 	return m.ID
+}
+
+func condense(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	if len(s) > 200 {
+		s = s[:200] + "…"
+	}
+	return s
 }
 
 // uniquePath avoids clobbering when two policies share a display name.
