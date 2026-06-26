@@ -72,7 +72,7 @@ func connect(ctx context.Context, cfg config.Config, ch chan tea.Msg) tea.Cmd {
 				send(ctx, ch, errMsg{err})
 				return
 			}
-			client := graph.New(cred)
+			client := graph.New(cred, auth.ScopesFor(cfg.AuthMethod))
 			tenant, err := client.Organization(ctx)
 			if err != nil {
 				send(ctx, ch, errMsg{err})

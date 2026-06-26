@@ -15,10 +15,35 @@ import (
 	"github.com/ugurkocde/TenuVault-TUI/internal/config"
 )
 
-// GraphScope requests all delegated/application permissions already consented
-// for the client. With the well-known Graph PowerShell app this covers the
-// DeviceManagement.ReadWrite scopes needed for backup and restore.
-var GraphScope = []string{"https://graph.microsoft.com/.default"}
+// AppScope is used for app-only (client secret / certificate) flows, where the
+// granted permissions are admin-consented on the app registration itself.
+var AppScope = []string{"https://graph.microsoft.com/.default"}
+
+// DelegatedScopes are requested explicitly for interactive / device-code sign-in
+// so Microsoft Entra prompts the signed-in admin to consent to the full set the
+// tool needs in that tenant — backup (read), and restore/sync (create). Each is
+// ReadWrite (which includes Read). Verified against Microsoft Graph docs.
+var DelegatedScopes = []string{
+	"https://graph.microsoft.com/DeviceManagementConfiguration.ReadWrite.All",
+	"https://graph.microsoft.com/DeviceManagementApps.ReadWrite.All",
+	"https://graph.microsoft.com/DeviceManagementServiceConfig.ReadWrite.All",
+	"https://graph.microsoft.com/DeviceManagementScripts.ReadWrite.All",
+	"https://graph.microsoft.com/DeviceManagementRBAC.ReadWrite.All",
+	"https://graph.microsoft.com/Policy.ReadWrite.ConditionalAccess",
+	"https://graph.microsoft.com/Organization.Read.All",
+}
+
+// ScopesFor returns the token scopes to request for the given auth method.
+// Delegated flows request the explicit scope set (prompting consent per tenant);
+// app-only flows use .default (permissions are consented on the app registration).
+func ScopesFor(method config.AuthMethod) []string {
+	switch method {
+	case config.AuthSecret, config.AuthCertificate:
+		return AppScope
+	default:
+		return DelegatedScopes
+	}
+}
 
 // DeviceCodePrompt is called with the device-code instructions to show the user.
 type DeviceCodePrompt func(message string)

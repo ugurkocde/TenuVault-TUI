@@ -98,9 +98,11 @@ remembered across launches (metadata only — no tokens or secrets are stored).
 
 ## Permissions
 
-Backups need read access; restores need write access. With the default
-well-known Microsoft Graph PowerShell client, an Intune administrator's
-delegated permissions cover both. The relevant scopes are:
+Interactive and device-code sign-in request the scopes below explicitly, so the
+signed-in admin is prompted to consent to them in each tenant (the first tenant
+and any tenant you add for sync). App-only (secret/certificate) sign-in uses
+`.default` — consent those permissions on the app registration instead. The
+relevant scopes are:
 
 - `DeviceManagementConfiguration.ReadWrite.All`
 - `DeviceManagementApps.ReadWrite.All`

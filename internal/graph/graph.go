@@ -17,8 +17,6 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
-
-	"github.com/ugurkocde/TenuVault-TUI/internal/auth"
 )
 
 const (
@@ -26,15 +24,16 @@ const (
 	baseBeta = "https://graph.microsoft.com/beta"
 )
 
-// Client calls Microsoft Graph using a token credential.
+// Client calls Microsoft Graph using a token credential and a fixed scope set.
 type Client struct {
-	cred azcore.TokenCredential
-	http *http.Client
+	cred   azcore.TokenCredential
+	scopes []string
+	http   *http.Client
 }
 
-// New returns a Graph client backed by the given credential.
-func New(cred azcore.TokenCredential) *Client {
-	return &Client{cred: cred, http: &http.Client{Timeout: 60 * time.Second}}
+// New returns a Graph client backed by the given credential and token scopes.
+func New(cred azcore.TokenCredential, scopes []string) *Client {
+	return &Client{cred: cred, scopes: scopes, http: &http.Client{Timeout: 60 * time.Second}}
 }
 
 func base(version string) string {
@@ -45,7 +44,7 @@ func base(version string) string {
 }
 
 func (c *Client) token(ctx context.Context) (string, error) {
-	tok, err := c.cred.GetToken(ctx, policy.TokenRequestOptions{Scopes: auth.GraphScope})
+	tok, err := c.cred.GetToken(ctx, policy.TokenRequestOptions{Scopes: c.scopes})
 	if err != nil {
 		return "", err
 	}
