@@ -210,10 +210,13 @@ type syncPol struct {
 func New(cfg config.Config) model {
 	ctx, cancel := context.WithCancel(context.Background())
 	start := screenAuth
-	// If tenants were saved from a previous session, open the tenant selector so
-	// the user can reconnect one instead of starting from a blank sign-in.
-	if len(cfg.Connections) > 0 {
-		start = screenConnections
+	// If real tenants were saved from a previous session, open the tenant selector
+	// so the user can reconnect one instead of starting from a blank sign-in.
+	for _, cc := range cfg.Connections {
+		if !placeholderTenant(cc.TenantID) {
+			start = screenConnections
+			break
+		}
 	}
 	return model{
 		cfg:    cfg,
@@ -265,11 +268,40 @@ func (m model) syncSourceClient() *graph.Client {
 	return nil
 }
 
-// persistConnections saves connection metadata (no tokens) to config.
+// placeholderTenant reports whether a tenant id is a sign-in placeholder rather
+// than a real, addressable tenant.
+func placeholderTenant(id string) bool {
+	switch id {
+	case "", "organizations", "common", "consumers":
+		return true
+	}
+	return false
+}
+
+// persistConnections saves connection metadata (no tokens) to config. It merges
+// remembered tenants with the currently-live ones by real tenant id, so
+// reconnecting one tenant never drops the others, and drops stale placeholders.
 func (m *model) persistConnections() {
-	var ccs []config.ConnConfig
+	byID := map[string]config.ConnConfig{}
+	var order []string
+	add := func(cc config.ConnConfig) {
+		if placeholderTenant(cc.TenantID) {
+			return
+		}
+		if _, ok := byID[cc.TenantID]; !ok {
+			order = append(order, cc.TenantID)
+		}
+		byID[cc.TenantID] = cc
+	}
+	for _, cc := range m.cfg.Connections {
+		add(cc)
+	}
 	for _, c := range m.conns {
-		ccs = append(ccs, c.AsConfig())
+		add(c.AsConfig())
+	}
+	var ccs []config.ConnConfig
+	for _, id := range order {
+		ccs = append(ccs, byID[id])
 	}
 	m.cfg.Connections = ccs
 	_ = config.Save(m.cfg)

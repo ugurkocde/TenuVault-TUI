@@ -29,7 +29,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, listen(m.ctx, m.ch)
 
 	case connectedMsg:
-		conn := connection.Connection{Label: msg.tenant.DisplayName, Cfg: msg.cfg, Tenant: msg.tenant, Client: msg.client}
+		// Capture the real tenant id (sign-in may have used "organizations"), so
+		// the connection is matched and re-targeted by its actual tenant.
+		cfg := msg.cfg
+		cfg.TenantID = msg.tenant.ID
+		conn := connection.Connection{Label: msg.tenant.DisplayName, Cfg: cfg, Tenant: msg.tenant, Client: msg.client}
 		idx := -1
 		for i := range m.conns {
 			if m.conns[i].Tenant.ID == conn.Tenant.ID {

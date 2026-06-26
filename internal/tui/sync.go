@@ -49,6 +49,9 @@ type connRow struct {
 func (m model) connectionRows() []connRow {
 	var rows []connRow
 	for _, cc := range m.cfg.Connections {
+		if placeholderTenant(cc.TenantID) {
+			continue
+		}
 		live := -1
 		for i := range m.conns {
 			if m.conns[i].Tenant.ID == cc.TenantID {
@@ -399,7 +402,11 @@ func (m model) viewConnections(w int) string {
 		default:
 			state = m.th.cardLabel.Render("○ not connected")
 		}
-		meta := m.th.cardLabel.Render("  " + r.tenantID + " · " + string(r.cc.AuthMethod))
+		detail := r.tenantID
+		if r.liveIdx >= 0 && m.conns[r.liveIdx].Tenant.DefaultDomain != "" {
+			detail = m.conns[r.liveIdx].Tenant.DefaultDomain
+		}
+		meta := m.th.cardLabel.Render("  " + detail + " · " + string(r.cc.AuthMethod))
 		b.WriteString(spread(marker+label+meta, state, w) + "\n")
 	}
 	addLabel := m.th.accent.Render("+ Add tenant")
