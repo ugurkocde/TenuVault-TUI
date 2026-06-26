@@ -6,10 +6,12 @@ import (
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
 	"github.com/ugurkocde/TenuVault-TUI/internal/config"
+	"github.com/ugurkocde/TenuVault-TUI/internal/connection"
 	"github.com/ugurkocde/TenuVault-TUI/internal/diff"
 	"github.com/ugurkocde/TenuVault-TUI/internal/graph"
 	"github.com/ugurkocde/TenuVault-TUI/internal/restore"
 	"github.com/ugurkocde/TenuVault-TUI/internal/store"
+	"github.com/ugurkocde/TenuVault-TUI/internal/syncer"
 )
 
 // TestRenderAllScreens ensures every screen renders without panicking and
@@ -18,7 +20,17 @@ func TestRenderAllScreens(t *testing.T) {
 	m := New(config.Default())
 	m.width, m.height = 100, 40
 	m.connected = true
-	m.tenant = graph.Tenant{DisplayName: "Ugur Koc Lab", DefaultDomain: "sl6ll.onmicrosoft.com", DomainCount: 4}
+	m.conns = []connection.Connection{
+		{Label: "Ugur Koc Lab", Tenant: graph.Tenant{DisplayName: "Ugur Koc Lab", DefaultDomain: "sl6ll.onmicrosoft.com", DomainCount: 4}},
+		{Label: "Contoso Prod", Tenant: graph.Tenant{DisplayName: "Contoso Prod", DefaultDomain: "contoso.onmicrosoft.com", DomainCount: 1}},
+	}
+	m.sourceIdx = 0
+	m.cfg.Connections = []config.ConnConfig{{Label: "Ugur Koc Lab", TenantID: "ffc1", AuthMethod: config.AuthInteractive}}
+	m.syncTypes = buildSyncTypes()
+	m.syncSourceLabel = "Ugur Koc Lab"
+	m.syncItems = []syncer.Item{{Category: "DeviceConfigurations", Name: "BitLocker"}}
+	m.syncTargetConn = 1
+	m.syncResults = []syncer.Result{{Item: syncer.Item{Name: "BitLocker"}, NewID: "9f2a"}}
 	b := store.Backup{Folder: "backup-2026-06-26-020000", Path: "/tmp/x",
 		Meta: store.Metadata{BackupDate: "2026-06-26-020000", Status: "Success", ItemCounts: map[string]int{"DeviceConfigurations": 5}}}
 	m.lastBackup = &b

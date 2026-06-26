@@ -33,9 +33,37 @@ type Config struct {
 	IncludeAssignments bool `json:"includeAssignments"`
 	RetentionDays      int  `json:"retentionDays"`
 
+	// Connections are the tenants the user has added (metadata only — no tokens
+	// or secrets are ever persisted).
+	Connections []ConnConfig `json:"connections,omitempty"`
+
 	// Optional unattended credentials (read from config or env; never required).
 	ClientSecret    string `json:"clientSecret,omitempty"`
 	CertificatePath string `json:"certificatePath,omitempty"`
+}
+
+// ConnConfig is the persisted metadata for one tenant connection.
+type ConnConfig struct {
+	Label      string     `json:"label"`
+	TenantID   string     `json:"tenantId"`
+	ClientID   string     `json:"clientId"`
+	AuthMethod AuthMethod `json:"authMethod"`
+	CertPath   string     `json:"certPath,omitempty"`
+}
+
+// ToConnConfig captures a config as a reusable connection entry.
+func (c Config) ToConnConfig(label string) ConnConfig {
+	return ConnConfig{Label: label, TenantID: c.TenantID, ClientID: c.ClientID, AuthMethod: c.AuthMethod, CertPath: c.CertificatePath}
+}
+
+// Apply returns a copy of the base config with this connection's fields set,
+// ready to authenticate. Secrets still come from the environment.
+func (cc ConnConfig) Apply(base Config) Config {
+	base.TenantID = cc.TenantID
+	base.ClientID = cc.ClientID
+	base.AuthMethod = cc.AuthMethod
+	base.CertificatePath = cc.CertPath
+	return base
 }
 
 // Default returns a config seeded with sensible defaults.

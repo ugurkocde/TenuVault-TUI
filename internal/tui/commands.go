@@ -11,8 +11,11 @@ import (
 	"github.com/ugurkocde/TenuVault-TUI/internal/config"
 	"github.com/ugurkocde/TenuVault-TUI/internal/diff"
 	"github.com/ugurkocde/TenuVault-TUI/internal/graph"
+	"github.com/ugurkocde/TenuVault-TUI/internal/jsonutil"
+	"github.com/ugurkocde/TenuVault-TUI/internal/policyops"
 	"github.com/ugurkocde/TenuVault-TUI/internal/restore"
 	"github.com/ugurkocde/TenuVault-TUI/internal/store"
+	"github.com/ugurkocde/TenuVault-TUI/internal/syncer"
 )
 
 // Async message types.
@@ -21,6 +24,7 @@ type (
 	connectedMsg  struct {
 		client *graph.Client
 		tenant graph.Tenant
+		cfg    config.Config
 	}
 	errMsg         struct{ err error }
 	backupEventMsg backup.Event
@@ -74,7 +78,7 @@ func connect(ctx context.Context, cfg config.Config, ch chan tea.Msg) tea.Cmd {
 				send(ctx, ch, errMsg{err})
 				return
 			}
-			send(ctx, ch, connectedMsg{client: client, tenant: tenant})
+			send(ctx, ch, connectedMsg{client: client, tenant: tenant, cfg: cfg})
 		}()
 		return nil
 	}
@@ -112,6 +116,51 @@ func loadBackups(root string) tea.Cmd {
 			return errMsg{err}
 		}
 		return backupsLoadedMsg(backups)
+	}
+}
+
+// syncPoliciesLoadedMsg carries the policies fetched for one type in the live
+// source browser.
+type syncPoliciesLoadedMsg struct {
+	typeKey  string
+	policies []syncPol
+	err      error
+}
+
+type (
+	syncEventMsg syncer.Event
+	syncDoneMsg  struct{ results []syncer.Result }
+)
+
+// loadSyncType lists a type's policies from the source tenant (lazy).
+func loadSyncType(ctx context.Context, c *graph.Client, pt catalog.PolicyType) tea.Cmd {
+	return func() tea.Msg {
+		items, err := c.ListAll(ctx, pt.Version, pt.ListPath, nil)
+		if err != nil {
+			return syncPoliciesLoadedMsg{typeKey: pt.Key, err: err}
+		}
+		pols := make([]syncPol, 0, len(items))
+		for _, raw := range items {
+			pols = append(pols, syncPol{
+				name: jsonutil.DisplayName(raw, pt.NameField),
+				id:   policyops.IDOf(raw),
+				raw:  raw,
+			})
+		}
+		return syncPoliciesLoadedMsg{typeKey: pt.Key, policies: pols}
+	}
+}
+
+// runSync copies items into the target tenant, streaming progress.
+func runSync(ctx context.Context, target, source *graph.Client, items []syncer.Item, prefix string, ch chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		go func() {
+			results := syncer.Run(ctx, target, source, items, prefix, func(e syncer.Event) {
+				send(ctx, ch, syncEventMsg(e))
+			})
+			send(ctx, ch, syncDoneMsg{results: results})
+		}()
+		return nil
 	}
 }
 

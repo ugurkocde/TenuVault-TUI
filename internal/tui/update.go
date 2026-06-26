@@ -9,6 +9,7 @@ import (
 	"github.com/ugurkocde/TenuVault-TUI/internal/backup"
 	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
 	"github.com/ugurkocde/TenuVault-TUI/internal/config"
+	"github.com/ugurkocde/TenuVault-TUI/internal/connection"
 	"github.com/ugurkocde/TenuVault-TUI/internal/restore"
 	"github.com/ugurkocde/TenuVault-TUI/internal/store"
 )
@@ -28,10 +29,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, listen(m.ctx, m.ch)
 
 	case connectedMsg:
-		m.client = msg.client
-		m.tenant = msg.tenant
+		conn := connection.Connection{Label: msg.tenant.DisplayName, Cfg: msg.cfg, Tenant: msg.tenant, Client: msg.client}
+		idx := -1
+		for i := range m.conns {
+			if m.conns[i].Tenant.ID == conn.Tenant.ID {
+				idx = i
+			}
+		}
+		if idx >= 0 {
+			m.conns[idx] = conn
+			m.sourceIdx = idx
+		} else {
+			m.conns = append(m.conns, conn)
+			m.sourceIdx = len(m.conns) - 1
+		}
 		m.connected = true
-		m.goTo(screenDashboard)
+		m.persistConnections()
+		if m.addingConn {
+			m.addingConn = false
+			m.goTo(screenConnections)
+		} else {
+			m.goTo(screenDashboard)
+		}
 		return m, loadBackups(m.cfg.BackupRoot)
 
 	case errMsg:
@@ -86,6 +105,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.goTo(screenDiffResult)
+		return m, nil
+
+	case syncPoliciesLoadedMsg:
+		m.applySyncPolicies(msg)
+		return m, nil
+
+	case syncEventMsg:
+		m.syncCur, m.syncTot = msg.Current, msg.Total
+		return m, listen(m.ctx, m.ch)
+
+	case syncDoneMsg:
+		m.syncResults = msg.results
+		m.syncRunning = false
+		m.goTo(screenSyncResults)
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -149,6 +182,25 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.keyPolicyView(key)
 	case screenSettings:
 		return m.keySettings(key)
+	case screenConnections:
+		return m.keyConnections(key)
+	case screenSyncSource:
+		return m.keySyncSource(key)
+	case screenSyncSelect:
+		return m.keySyncSelect(key)
+	case screenSyncPolicies:
+		return m.keySyncPolicies(key)
+	case screenSyncTarget:
+		return m.keySyncTarget(key)
+	case screenSyncNaming:
+		return m.keySyncNaming(key)
+	case screenSyncConfirm:
+		return m.keySyncConfirm(key)
+	case screenSyncResults:
+		if key == "enter" || key == "esc" || key == "q" {
+			m.goTo(screenDashboard)
+		}
+		return m, nil
 	case screenDiffResult:
 		return m.keyDiffResult(key)
 	case screenRestorePick:
@@ -195,7 +247,7 @@ func (m model) keyAuth(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) keyDashboard(key string) (tea.Model, tea.Cmd) {
-	const items = 5
+	const items = 7
 	switch key {
 	case "up", "k":
 		if m.dashCursor > 0 {
@@ -215,6 +267,11 @@ func (m model) keyDashboard(key string) (tea.Model, tea.Cmd) {
 		return m.openBrowse(modeDiffA, "Compare · pick baseline (older)")
 	case "r":
 		return m.openBrowse(modeRestore, "Restore · pick a backup")
+	case "y":
+		return m.startSync()
+	case "t":
+		m.connCursor = 0
+		m.goTo(screenConnections)
 	case "s":
 		m.settingsCursor = 0
 		m.goTo(screenSettings)
@@ -229,6 +286,11 @@ func (m model) keyDashboard(key string) (tea.Model, tea.Cmd) {
 		case 3:
 			return m.openBrowse(modeRestore, "Restore · pick a backup")
 		case 4:
+			return m.startSync()
+		case 5:
+			m.connCursor = 0
+			m.goTo(screenConnections)
+		case 6:
 			m.settingsCursor = 0
 			m.goTo(screenSettings)
 		}
@@ -295,8 +357,8 @@ func (m model) keyBackupSelect(key string) (tea.Model, tea.Cmd) {
 		m.progDone, m.progErr, m.progResult = false, nil, ""
 		m.progStatus, m.progCats = "", nil
 		m.goTo(screenProgress)
-		opts := backup.Options{Root: m.cfg.BackupRoot, Tenant: m.tenant, IncludeAssignments: m.cfg.IncludeAssignments}
-		return m, tea.Batch(runBackup(m.ctx, m.client, types, opts, m.ch), listen(m.ctx, m.ch))
+		opts := backup.Options{Root: m.cfg.BackupRoot, Tenant: m.sourceTenant(), IncludeAssignments: m.cfg.IncludeAssignments}
+		return m, tea.Batch(runBackup(m.ctx, m.sourceClient(), types, opts, m.ch), listen(m.ctx, m.ch))
 	}
 	return m, nil
 }
@@ -323,10 +385,11 @@ func (m model) keyBrowse(key string) (tea.Model, tea.Cmd) {
 			m.detail = &b
 			m.detailCats = scanCategories(b)
 			m.goTo(screenBrowseDetail)
-		case modeRestore:
+		case modeRestore, modeSyncBackup:
 			m.restoreBackup = &b
 			m.restoreItems = buildRestoreItems(b)
 			m.restoreCursor, m.restoreScroll = 0, 0
+			m.syncMode = m.browseMode == modeSyncBackup
 			m.goTo(screenRestorePick)
 		case modeDiffA:
 			a := b
@@ -502,7 +565,18 @@ func (m model) keyRestorePick(key string) (tea.Model, tea.Cmd) {
 	case "esc", "q":
 		m.goTo(screenDashboard)
 	case "enter":
-		if len(m.selectedRestoreItems()) == 0 {
+		sel := m.selectedRestoreItems()
+		if len(sel) == 0 {
+			return m, nil
+		}
+		if m.syncMode {
+			// Backup-as-source sync: carry the selection forward to a target.
+			m.syncItems = nil
+			for _, it := range sel {
+				m.syncItems = append(m.syncItems, syncerItemFromRestore(it))
+			}
+			m.syncTargetCursor = 0
+			m.goTo(screenSyncTarget)
 			return m, nil
 		}
 		m.goTo(screenRestoreConfirm)
@@ -520,7 +594,7 @@ func (m model) keyRestoreConfirm(key string) (tea.Model, tea.Cmd) {
 		}
 		m.restoreRunning = true
 		m.restoreResults = nil
-		return m, tea.Batch(runRestore(m.ctx, m.client, items, m.ch), listen(m.ctx, m.ch))
+		return m, tea.Batch(runRestore(m.ctx, m.sourceClient(), items, m.ch), listen(m.ctx, m.ch))
 	case "n", "esc":
 		m.goTo(screenRestorePick)
 	}

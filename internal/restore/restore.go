@@ -1,20 +1,19 @@
-// Package restore writes backed-up policies back to Microsoft Graph. It cleans
-// read-only fields, prefixes the display name with "[Restored]", forces
-// Conditional Access policies to a disabled state, and routes each item to the
-// correct endpoint. All writes are gated by explicit confirmation in the UI.
+// Package restore writes backed-up policies back to Microsoft Graph as new
+// policies. The cleaning, routing, and create logic lives in policyops; restore
+// is a thin wrapper that reads from a backup folder and prefixes "[Restored]".
 package restore
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"strings"
 
-	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
 	"github.com/ugurkocde/TenuVault-TUI/internal/graph"
-	"github.com/ugurkocde/TenuVault-TUI/internal/jsonutil"
+	"github.com/ugurkocde/TenuVault-TUI/internal/policyops"
 	"github.com/ugurkocde/TenuVault-TUI/internal/store"
 )
+
+// RestorePrefix is prepended to restored policy names so they are obvious and
+// never collide with the originals.
+const RestorePrefix = "[Restored] "
 
 // Item is one policy selected for restore.
 type Item struct {
@@ -30,22 +29,10 @@ type Result struct {
 	Err   error
 }
 
-// readOnlyKeys are stripped before POSTing a restored policy. OData annotations
-// (other than @odata.type) are stripped separately via jsonutil.IsODataAnnotation.
-var readOnlyKeys = map[string]bool{
-	"id":                   true,
-	"createdDateTime":      true,
-	"lastModifiedDateTime": true,
-	"version":              true,
-	"assignments":          true,
-	"isAssigned":           true,
-	"supportsScopeTags":    true,
-}
-
-// Plan builds restore items from a selection of "Category/Name" entries.
+// Plan builds restore items from a selection.
 func Plan(b store.Backup, selection []Item) []Item { return selection }
 
-// Restore POSTs each item to Graph and returns per-item results.
+// Restore creates each item in Graph and returns per-item results.
 func Restore(ctx context.Context, c *graph.Client, items []Item) []Result {
 	results := make([]Result, 0, len(items))
 	for _, it := range items {
@@ -56,107 +43,8 @@ func Restore(ctx context.Context, c *graph.Client, items []Item) []Result {
 			results = append(results, res)
 			continue
 		}
-		version, endpoint, body, err := prepare(it.Category, raw)
-		if err != nil {
-			res.Err = err
-			results = append(results, res)
-			continue
-		}
-		created, err := c.Post(ctx, version, endpoint, body)
-		if err != nil {
-			res.Err = err
-			results = append(results, res)
-			continue
-		}
-		res.NewID = idOf(created)
+		res.NewID, res.Err = policyops.Create(ctx, c, it.Category, raw, RestorePrefix)
 		results = append(results, res)
 	}
 	return results
-}
-
-// prepare cleans a policy and resolves its restore endpoint.
-func prepare(category string, raw json.RawMessage) (version, endpoint string, body json.RawMessage, err error) {
-	pt, ok := routeByType(category, raw)
-	if !ok {
-		if category == "AppProtectionPolicies" {
-			return "", "", nil, fmt.Errorf("unrecognized app protection type %q", odataTypeOf(raw))
-		}
-		return "", "", nil, fmt.Errorf("no restore route for category %q", category)
-	}
-	if !pt.RestoreSupported {
-		return "", "", nil, fmt.Errorf("%s is backup-only; restore is not supported", pt.Friendly)
-	}
-	cleaned := jsonutil.StripKeysFunc(mustMap(raw), func(k string) bool {
-		return readOnlyKeys[k] || jsonutil.IsODataAnnotation(k)
-	})
-	m, _ := cleaned.(map[string]any)
-	if m == nil {
-		m = map[string]any{}
-	}
-	// Prefix the display name so restores are obvious and never overwrite.
-	for _, field := range []string{"displayName", "name"} {
-		if v, ok := m[field].(string); ok && v != "" && !strings.HasPrefix(v, "[Restored]") {
-			m[field] = "[Restored] " + v
-			break
-		}
-	}
-	// Conditional Access: restore disabled so nothing locks admins out.
-	if category == "ConditionalAccessPolicies" {
-		m["state"] = "disabled"
-	}
-	out, err := json.Marshal(m)
-	if err != nil {
-		return "", "", nil, err
-	}
-	return pt.Version, pt.RestoreEndpoint(), out, nil
-}
-
-// routeByType resolves the policy type for a category, disambiguating app
-// protection by @odata.type.
-func routeByType(category string, raw json.RawMessage) (catalog.PolicyType, bool) {
-	odataType := strings.ToLower(odataTypeOf(raw))
-	var match catalog.PolicyType
-	found := false
-	for _, pt := range catalog.All() {
-		if pt.Category != category {
-			continue
-		}
-		if category == "AppProtectionPolicies" {
-			if strings.Contains(odataType, "ios") && pt.Key == "iosAppProtection" {
-				return pt, true
-			}
-			if strings.Contains(odataType, "android") && pt.Key == "androidAppProtection" {
-				return pt, true
-			}
-			if strings.Contains(odataType, "windows") && pt.Key == "windowsAppProtection" {
-				return pt, true
-			}
-			continue
-		}
-		match, found = pt, true
-		break
-	}
-	return match, found
-}
-
-func odataTypeOf(raw json.RawMessage) string {
-	var m struct {
-		Type string `json:"@odata.type"`
-	}
-	_ = json.Unmarshal(raw, &m)
-	return m.Type
-}
-
-func idOf(raw json.RawMessage) string {
-	var m struct {
-		ID string `json:"id"`
-	}
-	_ = json.Unmarshal(raw, &m)
-	return m.ID
-}
-
-func mustMap(raw json.RawMessage) any {
-	var v any
-	_ = json.Unmarshal(raw, &v)
-	return v
 }

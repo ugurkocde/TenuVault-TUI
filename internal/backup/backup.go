@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
 	"github.com/ugurkocde/TenuVault-TUI/internal/graph"
 	"github.com/ugurkocde/TenuVault-TUI/internal/jsonutil"
+	"github.com/ugurkocde/TenuVault-TUI/internal/policyops"
 	"github.com/ugurkocde/TenuVault-TUI/internal/store"
 )
 
@@ -115,7 +115,7 @@ func Run(ctx context.Context, c *graph.Client, types []catalog.PolicyType, opts 
 			if err := ctx.Err(); err != nil {
 				return Result{}, err
 			}
-			full, warn := enrich(ctx, c, pt, item, opts.IncludeAssignments)
+			full, warn := policyops.FetchFull(ctx, c, pt, item, opts.IncludeAssignments)
 			if warn {
 				cr.Warnings++
 				emit(Event{Category: pt.Category, Friendly: pt.Friendly, Err: fmt.Errorf("incomplete detail"), Current: i + 1, Total: total})
@@ -176,77 +176,6 @@ func Run(ctx context.Context, c *graph.Client, types []catalog.PolicyType, opts 
 	return Result{Folder: folder, Path: path, Status: status, ItemCounts: counts, Categories: catList}, nil
 }
 
-// enrich fetches per-item detail, nested sub-resources, and (optionally)
-// assignments. It returns the enriched JSON and whether anything was missing.
-func enrich(ctx context.Context, c *graph.Client, pt catalog.PolicyType, item json.RawMessage, includeAssignments bool) (json.RawMessage, bool) {
-	full := item
-	warn := false
-	id := itemID(item)
-
-	if pt.DetailByID && id != "" {
-		var q url.Values
-		if pt.Expand != "" {
-			q = url.Values{"$expand": {pt.Expand}}
-		}
-		if detail, err := c.Get(ctx, pt.Version, pt.ListPath+"/"+id, q); err == nil {
-			full = detail
-		} else {
-			warn = true
-		}
-	}
-
-	if pt.Sub != nil && id != "" {
-		var q url.Values
-		if pt.Sub.Expand != "" {
-			q = url.Values{"$expand": {pt.Sub.Expand}}
-		}
-		if vals, err := c.ListAll(ctx, pt.Version, pt.ListPath+"/"+id+"/"+pt.Sub.Suffix, q); err == nil {
-			full = embed(full, pt.Sub.EmbedKey, vals)
-		} else {
-			warn = true
-		}
-	}
-
-	if includeAssignments && id != "" && supportsAssignments(pt) {
-		if vals, err := c.ListAll(ctx, pt.Version, pt.ListPath+"/"+id+"/assignments", nil); err == nil {
-			full = embed(full, "assignments", vals)
-		}
-	}
-	return full, warn
-}
-
-// supportsAssignments reports whether a type exposes an /assignments collection.
-func supportsAssignments(pt catalog.PolicyType) bool {
-	if !strings.HasPrefix(pt.ListPath, "/deviceManagement/") && !strings.HasPrefix(pt.ListPath, "/deviceAppManagement/") {
-		return false
-	}
-	switch pt.Key {
-	case "roleScopeTags", "deviceCategories", "notificationTemplates", "appCategories", "assignmentFilters":
-		return false
-	}
-	return true
-}
-
-// embed inserts a sub-resource value array into the policy JSON under key.
-func embed(raw json.RawMessage, key string, vals []json.RawMessage) json.RawMessage {
-	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return raw
-	}
-	arr := make([]any, 0, len(vals))
-	for _, v := range vals {
-		var x any
-		if err := json.Unmarshal(v, &x); err == nil {
-			arr = append(arr, x)
-		}
-	}
-	m[key] = arr
-	if out, err := json.Marshal(m); err == nil {
-		return out
-	}
-	return raw
-}
-
 var noiseKeys = map[string]bool{"@odata.context": true}
 
 func writePolicy(dir, name string, raw json.RawMessage) error {
@@ -287,14 +216,6 @@ func writeLog(dir string, m store.Metadata, cats []CategoryResult) {
 		}
 	}
 	_ = os.WriteFile(filepath.Join(dir, "backup.log"), []byte(b.String()), 0o644)
-}
-
-func itemID(raw json.RawMessage) string {
-	var m struct {
-		ID string `json:"id"`
-	}
-	_ = json.Unmarshal(raw, &m)
-	return m.ID
 }
 
 func condense(s string) string {

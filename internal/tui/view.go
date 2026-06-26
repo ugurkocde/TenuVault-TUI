@@ -28,7 +28,7 @@ func (m model) render() string {
 	case screenConnecting:
 		body, hints = m.viewConnecting(), "esc cancel"
 	case screenDashboard:
-		body, hints = m.viewDashboard(w), "b backup · l browse · d compare · r restore · ? help · q quit"
+		body, hints = m.viewDashboard(w), "b backup · l browse · d compare · r restore · y sync · t tenants · q quit"
 	case screenBackupSelect:
 		body, hints = m.viewBackupSelect(w), "space toggle · a all · enter start · esc back"
 	case screenProgress:
@@ -43,6 +43,22 @@ func (m model) render() string {
 		body, hints = m.viewPolicyView(w), "↑/↓ scroll · esc back"
 	case screenSettings:
 		body, hints = m.viewSettings(w), "↑/↓ move · space toggle · ←/→ adjust · esc back"
+	case screenConnections:
+		body, hints = m.viewConnections(w), "↑/↓ move · enter use · a add · esc back"
+	case screenSyncSource:
+		body, hints = m.viewSyncSource(w), "↑/↓ move · enter pick · esc back"
+	case screenSyncSelect:
+		body, hints = m.viewSyncSelect(w), "space whole type · enter pick policies · n next · esc back"
+	case screenSyncPolicies:
+		body, hints = m.viewSyncPolicies(w), "space toggle · a all · esc back"
+	case screenSyncTarget:
+		body, hints = m.viewSyncTarget(w), "↑/↓ move · enter pick target · esc back"
+	case screenSyncNaming:
+		body, hints = m.viewSyncNaming(w), "↑/↓ move · enter choose · esc back"
+	case screenSyncConfirm:
+		body, hints = m.viewSyncConfirm(w), "y create · n cancel"
+	case screenSyncResults:
+		body, hints = m.viewSyncResults(w), "enter dashboard"
 	case screenDiffResult:
 		body, hints = m.viewDiffResult(w), "↑/↓ scroll · esc back"
 	case screenRestorePick:
@@ -68,9 +84,18 @@ func (m model) header(w int) string {
 	var right string
 	if m.connected {
 		dot := lipgloss.NewStyle().Foreground(colGreen).Render("●")
-		right = fmt.Sprintf("%s connected  %s  %s",
+		label := m.sourceTenant().DisplayName
+		if c := m.sourceConn(); c != nil {
+			label = c.DisplayLabel()
+		}
+		suffix := ""
+		if len(m.conns) > 1 {
+			suffix = m.th.crumb.Render(fmt.Sprintf("  +%d", len(m.conns)-1))
+		}
+		right = fmt.Sprintf("%s source: %s%s  %s",
 			dot,
-			m.th.normal.Render(m.tenant.DisplayName),
+			m.th.normal.Render(label),
+			suffix,
 			m.th.crumb.Render(time.Now().Format("15:04")))
 	} else {
 		right = m.th.crumb.Render("not connected")
@@ -116,9 +141,9 @@ func (m model) viewDashboard(w int) string {
 	}
 	tenant := m.th.panel.Width(cardW).Render(strings.Join([]string{
 		m.th.panelLbl.Render("Tenant"),
-		m.th.normal.Bold(true).Render(emptyDash(m.tenant.DisplayName)),
-		m.th.dim.Render(emptyDash(m.tenant.DefaultDomain)),
-		m.th.cardLabel.Render(fmt.Sprintf("%d verified domains", m.tenant.DomainCount)),
+		m.th.normal.Bold(true).Render(emptyDash(m.sourceTenant().DisplayName)),
+		m.th.dim.Render(emptyDash(m.sourceTenant().DefaultDomain)),
+		m.th.cardLabel.Render(fmt.Sprintf("%d verified domains", m.sourceTenant().DomainCount)),
 	}, "\n"))
 
 	var lastLines []string
@@ -141,6 +166,8 @@ func (m model) viewDashboard(w int) string {
 		{"Browse backups", "l"},
 		{"Compare / drift", "d"},
 		{"Restore policies", "r"},
+		{"Sync to another tenant", "y"},
+		{"Tenants", "t"},
 		{"Settings", "s"},
 	}
 	var mb strings.Builder
@@ -205,7 +232,7 @@ func (m model) viewBackupSelect(w int) string {
 
 func (m model) viewProgress(w int) (string, string) {
 	var b strings.Builder
-	b.WriteString(m.th.title.Render(m.progTitle) + "  " + m.th.crumb.Render(m.tenant.DisplayName) + "\n\n")
+	b.WriteString(m.th.title.Render(m.progTitle) + "  " + m.th.crumb.Render(m.sourceTenant().DisplayName) + "\n\n")
 	for _, cat := range m.progOrder {
 		var icon string
 		switch m.progEvents[cat] {
@@ -437,7 +464,7 @@ func (m model) viewRestoreConfirm(w int) string {
 	b.WriteString(m.th.crumb.Render("Restore · confirm") + "\n\n")
 	items := m.selectedRestoreItems()
 	b.WriteString(m.th.dim.Render(fmt.Sprintf("These %d policies will be ", len(items))) +
-		m.th.success.Render("created") + m.th.dim.Render(" in ") + m.th.normal.Render(m.tenant.DisplayName) + "\n\n")
+		m.th.success.Render("created") + m.th.dim.Render(" in ") + m.th.normal.Render(m.sourceTenant().DisplayName) + "\n\n")
 	hasCA := false
 	limit := len(items)
 	if limit > 10 {

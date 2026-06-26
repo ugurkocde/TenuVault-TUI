@@ -26,6 +26,11 @@ Built with Go and the [Charm](https://charm.land) stack (Bubble Tea, Lip Gloss).
   confirmation, and a `[Restored]` name prefix so nothing is overwritten.
   Conditional Access policies are restored disabled by default.
 - Settings for assignment capture, backup retention, and sign-in method.
+- Connect multiple tenants and **sync policies tenant-to-tenant** (e.g. dev to
+  prod): pick whole types or individual policies from a live source tenant or a
+  saved backup, choose a target, and create them there. Sync is create-only and
+  **never overwrites** — it only ever creates new policies, leaving existing ones
+  untouched (Conditional Access arrives disabled, assignments are not copied).
 
 ## Coverage
 
@@ -77,9 +82,19 @@ On first run, choose a sign-in method. Interactive sign-in opens your browser;
 device code prints a code to enter at `microsoft.com/devicelogin`. After signing
 in, the dashboard shows your tenant and last backup.
 
-Keys: `b` back up, `l` browse, `d` compare, `r` restore, arrow keys / `j` `k`
-to move, `space` to toggle, `enter` to select, `esc` to go back, `q` to quit,
-`?` for help.
+Keys: `b` back up, `l` browse, `d` compare, `r` restore, `y` sync, `t` tenants,
+`s` settings, arrow keys / `j` `k` to move, `space` to toggle, `enter` to select,
+`esc` to go back, `q` to quit, `?` for help.
+
+## Tenant sync
+
+To copy policies between tenants, add each tenant under `Tenants` (`t`) — sign in
+interactively or with app credentials. Then choose `Sync to another tenant`
+(`y`), pick a source (a connected tenant or a saved backup), select whole types
+or drill in to pick individual policies, choose a target tenant, pick whether to
+keep the original name or add a prefix, and confirm. The target tenant's sign-in
+needs write scopes (`DeviceManagement*.ReadWrite.All`). Tenant connections are
+remembered across launches (metadata only — no tokens or secrets are stored).
 
 ## Permissions
 

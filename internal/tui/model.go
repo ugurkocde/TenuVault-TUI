@@ -3,6 +3,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -10,10 +11,12 @@ import (
 	"github.com/ugurkocde/TenuVault-TUI/internal/backup"
 	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
 	"github.com/ugurkocde/TenuVault-TUI/internal/config"
+	"github.com/ugurkocde/TenuVault-TUI/internal/connection"
 	"github.com/ugurkocde/TenuVault-TUI/internal/diff"
 	"github.com/ugurkocde/TenuVault-TUI/internal/graph"
 	"github.com/ugurkocde/TenuVault-TUI/internal/restore"
 	"github.com/ugurkocde/TenuVault-TUI/internal/store"
+	"github.com/ugurkocde/TenuVault-TUI/internal/syncer"
 )
 
 type screen int
@@ -33,6 +36,14 @@ const (
 	screenRestoreConfirm
 	screenRestoreResult
 	screenSettings
+	screenConnections
+	screenSyncSource
+	screenSyncSelect
+	screenSyncPolicies
+	screenSyncTarget
+	screenSyncNaming
+	screenSyncConfirm
+	screenSyncResults
 	screenError
 )
 
@@ -44,6 +55,7 @@ const (
 	modeRestore
 	modeDiffA
 	modeDiffB
+	modeSyncBackup
 )
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -89,11 +101,13 @@ type model struct {
 	err           error
 	showHelp      bool
 
-	// connection
-	client     *graph.Client
-	tenant     graph.Tenant
+	// connections
+	conns      []connection.Connection
+	sourceIdx  int
 	connected  bool
 	deviceCode string
+	addingConn bool
+	connCursor int
 
 	// auth screen
 	authOptions []authOption
@@ -153,18 +167,61 @@ type model struct {
 	restoreCursor  int
 	restoreScroll  int
 	restoreResults []restore.Result
+
+	// sync
+	syncFromBackup   bool
+	syncSourceConn   int
+	syncTargetConn   int
+	syncSourceLabel  string
+	syncTypes        []syncType
+	syncTypeCursor   int
+	syncActiveType   int
+	syncPolCursor    int
+	syncNamePrefix   string
+	syncNameCursor   int
+	syncSourceCursor int
+	syncTargetCursor int
+	syncItems        []syncer.Item
+	syncRunning      bool
+	syncMode         bool
+	syncCur          int
+	syncTot          int
+	syncResults      []syncer.Result
+}
+
+// syncType is a restore-supported policy type in the live sync browser, with
+// its policies loaded lazily from the source tenant.
+type syncType struct {
+	pt         catalog.PolicyType
+	loaded     bool
+	loading    bool
+	pendingAll bool
+	policies   []syncPol
+}
+
+type syncPol struct {
+	name string
+	id   string
+	raw  json.RawMessage
+	sel  bool
 }
 
 // New builds the root model.
 func New(cfg config.Config) model {
 	ctx, cancel := context.WithCancel(context.Background())
+	start := screenAuth
+	// If tenants were saved from a previous session, open the tenant selector so
+	// the user can reconnect one instead of starting from a blank sign-in.
+	if len(cfg.Connections) > 0 {
+		start = screenConnections
+	}
 	return model{
 		cfg:    cfg,
 		ctx:    ctx,
 		cancel: cancel,
 		ch:     make(chan tea.Msg, 64),
 		th:     newTheme(),
-		screen: screenAuth,
+		screen: start,
 		authOptions: []authOption{
 			{"Interactive sign-in", "Opens your browser. No app registration needed.", config.AuthInteractive},
 			{"Device code", "Headless: enter a code at microsoft.com/devicelogin.", config.AuthDeviceCode},
@@ -172,6 +229,50 @@ func New(cfg config.Config) model {
 		progEvents:   map[string]string{},
 		progFriendly: map[string]string{},
 	}
+}
+
+// sourceConn returns the active source connection, or nil.
+func (m model) sourceConn() *connection.Connection {
+	if m.sourceIdx >= 0 && m.sourceIdx < len(m.conns) {
+		return &m.conns[m.sourceIdx]
+	}
+	return nil
+}
+
+// sourceClient returns the active source tenant's Graph client, or nil.
+func (m model) sourceClient() *graph.Client {
+	if c := m.sourceConn(); c != nil {
+		return c.Client
+	}
+	return nil
+}
+
+// sourceTenant returns the active source tenant.
+func (m model) sourceTenant() graph.Tenant {
+	if c := m.sourceConn(); c != nil {
+		return c.Tenant
+	}
+	return graph.Tenant{}
+}
+
+// syncSourceClient returns the Graph client for the tenant chosen as the sync
+// source (distinct from the dashboard's active source), or nil for a backup
+// source.
+func (m model) syncSourceClient() *graph.Client {
+	if !m.syncFromBackup && m.syncSourceConn >= 0 && m.syncSourceConn < len(m.conns) {
+		return m.conns[m.syncSourceConn].Client
+	}
+	return nil
+}
+
+// persistConnections saves connection metadata (no tokens) to config.
+func (m *model) persistConnections() {
+	var ccs []config.ConnConfig
+	for _, c := range m.conns {
+		ccs = append(ccs, c.AsConfig())
+	}
+	m.cfg.Connections = ccs
+	_ = config.Save(m.cfg)
 }
 
 func (m model) Init() tea.Cmd { return tick() }
