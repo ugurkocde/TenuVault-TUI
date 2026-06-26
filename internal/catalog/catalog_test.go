@@ -23,8 +23,8 @@ func TestCategoryRestoreSupported(t *testing.T) {
 	if !CategoryRestoreSupported("AppProtectionPolicies") {
 		t.Error("AppProtectionPolicies should be restorable")
 	}
-	// Backup-only categories.
-	for _, c := range []string{"GroupPolicyConfigurations", "EndpointSecurityIntents", "EnrollmentConfigurations"} {
+	// Backup-only categories (need multi-part creates).
+	for _, c := range []string{"GroupPolicyConfigurations", "EndpointSecurityIntents"} {
 		if CategoryRestoreSupported(c) {
 			t.Errorf("%s should be backup-only", c)
 		}
@@ -39,8 +39,8 @@ func TestByKeyAndDefaults(t *testing.T) {
 		t.Error("conditionalAccess missing")
 	}
 	sel := DefaultSelection()
-	if sel["roleScopeTags"] {
-		t.Error("unverified roleScopeTags should not be default-selected")
+	if !sel["roleScopeTags"] {
+		t.Error("roleScopeTags should be default-selected once verified")
 	}
 	if !sel["deviceConfigurations"] {
 		t.Error("deviceConfigurations should be default-selected")

@@ -73,7 +73,7 @@ func All() []PolicyType {
 		{Key: "autopilotProfiles", Friendly: "Autopilot profiles", Category: "AutopilotProfiles", Group: "Enrollment & updates", Version: "beta",
 			ListPath: "/deviceManagement/windowsAutopilotDeploymentProfiles", NameField: "displayName", RestoreSupported: true, Verified: true},
 		{Key: "enrollmentConfigurations", Friendly: "Enrollment configurations", Category: "EnrollmentConfigurations", Group: "Enrollment & updates", Version: "beta",
-			ListPath: "/deviceManagement/deviceEnrollmentConfigurations", NameField: "displayName", RestoreSupported: false, Verified: true},
+			ListPath: "/deviceManagement/deviceEnrollmentConfigurations", NameField: "displayName", RestoreSupported: true, Verified: true},
 		{Key: "featureUpdateProfiles", Friendly: "Feature update profiles", Category: "FeatureUpdateProfiles", Group: "Enrollment & updates", Version: "beta",
 			ListPath: "/deviceManagement/windowsFeatureUpdateProfiles", NameField: "displayName", RestoreSupported: true, Verified: true},
 		{Key: "qualityUpdateProfiles", Friendly: "Quality update profiles", Category: "QualityUpdateProfiles", Group: "Enrollment & updates", Version: "beta",
@@ -83,7 +83,7 @@ func All() []PolicyType {
 
 		// --- Tenant administration ---
 		{Key: "roleScopeTags", Friendly: "Scope tags", Category: "RoleScopeTags", Group: "Tenant admin", Version: "beta",
-			ListPath: "/deviceManagement/roleScopeTags", NameField: "displayName", RestoreSupported: true, Verified: false},
+			ListPath: "/deviceManagement/roleScopeTags", NameField: "displayName", RestoreSupported: true, Verified: true},
 		{Key: "deviceCategories", Friendly: "Device categories", Category: "DeviceCategories", Group: "Tenant admin", Version: "beta",
 			ListPath: "/deviceManagement/deviceCategories", NameField: "displayName", RestoreSupported: true, Verified: true},
 		{Key: "termsAndConditions", Friendly: "Terms and conditions", Category: "TermsAndConditions", Group: "Tenant admin", Version: "beta",
