@@ -130,6 +130,7 @@ func (m model) keySyncSource(key string) (tea.Model, tea.Cmd) {
 			m.syncSourceLabel = m.conns[m.syncSourceCursor].DisplayLabel()
 			m.syncTypes = buildSyncTypes()
 			m.syncTypeCursor = 0
+			m.syncGen++ // invalidate any in-flight loads from a previous source
 			m.goTo(screenSyncSelect)
 			return m, nil
 		}
@@ -178,7 +179,7 @@ func (m model) keySyncSelect(key string) (tea.Model, tea.Cmd) {
 			}
 			st.loading = true
 			st.pendingAll = true
-			return m, loadSyncType(m.ctx, m.syncSourceClient(), st.pt)
+			return m, loadSyncType(m.ctx, m.syncSourceClient(), st.pt, m.syncGen)
 		}
 		all := allSelected(st.policies)
 		for i := range st.policies {
@@ -191,7 +192,7 @@ func (m model) keySyncSelect(key string) (tea.Model, tea.Cmd) {
 		m.goTo(screenSyncPolicies)
 		if !st.loaded && !st.loading {
 			st.loading = true
-			return m, loadSyncType(m.ctx, m.syncSourceClient(), st.pt)
+			return m, loadSyncType(m.ctx, m.syncSourceClient(), st.pt, m.syncGen)
 		}
 	case "n", "tab":
 		m.syncItems = m.gatherLiveSyncItems()
@@ -239,6 +240,9 @@ func (m model) keySyncPolicies(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) applySyncPolicies(msg syncPoliciesLoadedMsg) {
+	if msg.gen != m.syncGen {
+		return // stale result from a previous source selection
+	}
 	for i := range m.syncTypes {
 		if m.syncTypes[i].pt.Key != msg.typeKey {
 			continue
@@ -407,6 +411,7 @@ func (m model) viewConnections(w int) string {
 			detail = m.conns[r.liveIdx].Tenant.DefaultDomain
 		}
 		meta := m.th.cardLabel.Render("  " + detail + " · " + string(r.cc.AuthMethod))
+		m.recordHit(&b, i)
 		b.WriteString(spread(marker+label+meta, state, w) + "\n")
 	}
 	addLabel := m.th.accent.Render("+ Add tenant")
@@ -415,6 +420,7 @@ func (m model) viewConnections(w int) string {
 	} else {
 		addLabel = "  " + addLabel
 	}
+	m.recordHit(&b, len(rows))
 	b.WriteString(addLabel + "\n")
 	return b.String()
 }
@@ -425,10 +431,12 @@ func (m model) viewSyncSource(w int) string {
 	b.WriteString(m.th.dim.Render("Copy policies from…") + "\n\n")
 	for i, c := range m.conns {
 		marker, label := m.rowMarker(i == m.syncSourceCursor, c.DisplayLabel())
+		m.recordHit(&b, i)
 		b.WriteString(marker + label + m.th.cardLabel.Render("  "+c.Tenant.DefaultDomain) + "\n")
 	}
 	i := len(m.conns)
 	marker, label := m.rowMarker(m.syncSourceCursor == i, "Saved backup")
+	m.recordHit(&b, i)
 	b.WriteString(marker + label + m.th.cardLabel.Render("  push a local backup into a tenant") + "\n")
 	return b.String()
 }
@@ -464,7 +472,11 @@ func (m model) viewSyncSelect(w int) string {
 		case st.loaded:
 			right = m.th.cardLabel.Render(fmt.Sprintf("%d", len(st.policies)))
 		}
+		m.recordHit(&b, i)
 		b.WriteString(spread("  "+box+" "+label, right, min(w, 72)) + "\n")
+	}
+	if sb := m.scrollbar(start, end, len(m.syncTypes)); sb != "" {
+		b.WriteString("  " + sb + "\n")
 	}
 	b.WriteString("\n" + m.th.accent.Render(fmt.Sprintf("%d policies selected", total)))
 	return b.String()
@@ -496,7 +508,11 @@ func (m model) viewSyncPolicies(w int) string {
 		if i == m.syncPolCursor {
 			name = m.th.selected.Render(p.name)
 		}
+		m.recordHit(&b, i)
 		b.WriteString(box + " " + name + "\n")
+	}
+	if sb := m.scrollbar(startp, endp, len(st.policies)); sb != "" {
+		b.WriteString("  " + sb + "\n")
 	}
 	b.WriteString("\n" + m.th.accent.Render(fmt.Sprintf("%d of %d selected", countSelected(st.policies), len(st.policies))))
 	return b.String()
@@ -514,6 +530,7 @@ func (m model) viewSyncTarget(w int) string {
 	for i, ci := range targets {
 		c := m.conns[ci]
 		marker, label := m.rowMarker(i == m.syncTargetCursor, c.DisplayLabel())
+		m.recordHit(&b, i)
 		b.WriteString(marker + label + m.th.cardLabel.Render("  "+c.Tenant.DefaultDomain) + "\n")
 	}
 	return b.String()
@@ -528,6 +545,7 @@ func (m model) viewSyncNaming(w int) string {
 	}
 	for i, o := range opts {
 		marker, label := m.rowMarker(i == m.syncNameCursor, o.label)
+		m.recordHit(&b, i)
 		b.WriteString(marker + label + "\n")
 		b.WriteString("    " + m.th.dim.Render(o.desc) + "\n")
 	}

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -123,6 +124,7 @@ func loadBackups(root string) tea.Cmd {
 // source browser.
 type syncPoliciesLoadedMsg struct {
 	typeKey  string
+	gen      int
 	policies []syncPol
 	err      error
 }
@@ -132,12 +134,18 @@ type (
 	syncDoneMsg  struct{ results []syncer.Result }
 )
 
-// loadSyncType lists a type's policies from the source tenant (lazy).
-func loadSyncType(ctx context.Context, c *graph.Client, pt catalog.PolicyType) tea.Cmd {
+var errNoSource = errors.New("no source tenant connected")
+
+// loadSyncType lists a type's policies from the source tenant (lazy). gen is the
+// sync generation the request was issued under, used to drop stale results.
+func loadSyncType(ctx context.Context, c *graph.Client, pt catalog.PolicyType, gen int) tea.Cmd {
 	return func() tea.Msg {
+		if c == nil {
+			return syncPoliciesLoadedMsg{typeKey: pt.Key, gen: gen, err: errNoSource}
+		}
 		items, err := c.ListAll(ctx, pt.Version, pt.ListPath, nil)
 		if err != nil {
-			return syncPoliciesLoadedMsg{typeKey: pt.Key, err: err}
+			return syncPoliciesLoadedMsg{typeKey: pt.Key, gen: gen, err: err}
 		}
 		pols := make([]syncPol, 0, len(items))
 		for _, raw := range items {
@@ -147,7 +155,7 @@ func loadSyncType(ctx context.Context, c *graph.Client, pt catalog.PolicyType) t
 				raw:  raw,
 			})
 		}
-		return syncPoliciesLoadedMsg{typeKey: pt.Key, policies: pols}
+		return syncPoliciesLoadedMsg{typeKey: pt.Key, gen: gen, policies: pols}
 	}
 }
 

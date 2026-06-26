@@ -48,6 +48,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sourceIdx = len(m.conns) - 1
 		}
 		m.connected = true
+		m.status, m.statusKind = "Connected to "+msg.tenant.DisplayName, "ok"
 		m.persistConnections()
 		if m.addingConn {
 			m.addingConn = false
@@ -86,6 +87,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.progResult = fmt.Sprintf("%d policies in %s", total, msg.res.Folder)
 			m.progStatus = msg.res.Status
 			m.progCats = msg.res.Categories
+			switch msg.res.Status {
+			case "Failed":
+				m.status, m.statusKind = "Backup failed", "err"
+			case "CompletedWithWarnings":
+				m.status, m.statusKind = "Backup completed with warnings", "warn"
+			default:
+				m.status, m.statusKind = "Backup complete · "+m.progResult, "ok"
+			}
 		}
 		var cmds []tea.Cmd
 		cmds = append(cmds, loadBackups(m.cfg.BackupRoot))
@@ -97,6 +106,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case restoreDoneMsg:
 		m.restoreResults = msg.results
 		m.restoreRunning = false
+		fail := 0
+		for _, r := range msg.results {
+			if r.Err != nil {
+				fail++
+			}
+		}
+		m.status, m.statusKind = fmt.Sprintf("Restored %d, %d failed", len(msg.results)-fail, fail), okOrWarn(fail)
 		m.goTo(screenRestoreResult)
 		return m, loadBackups(m.cfg.BackupRoot)
 
@@ -122,11 +138,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case syncDoneMsg:
 		m.syncResults = msg.results
 		m.syncRunning = false
+		fail := 0
+		for _, r := range msg.results {
+			if r.Err != nil {
+				fail++
+			}
+		}
+		m.status, m.statusKind = fmt.Sprintf("Synced %d, %d failed", len(msg.results)-fail, fail), okOrWarn(fail)
 		m.goTo(screenSyncResults)
 		return m, nil
 
 	case tea.KeyPressMsg:
-		return m.handleKey(msg)
+		return m.handleKey(msg.String())
+
+	case tea.MouseWheelMsg, tea.MouseClickMsg:
+		if mm, cmd, ok := m.handleMouse(msg); ok {
+			return mm, cmd
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -148,8 +177,7 @@ func (m *model) applyBackupEvent(e backupEventMsg) {
 	}
 }
 
-func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
+func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 	if key == "ctrl+c" {
 		m.cancel()
 		return m, tea.Quit
@@ -158,6 +186,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.showHelp = !m.showHelp
 		return m, nil
 	}
+	// Any deliberate keypress clears a transient status message.
+	m.status, m.statusKind = "", ""
 
 	switch m.screen {
 	case screenAuth:
@@ -509,6 +539,7 @@ func (m model) keySettings(key string) (tea.Model, tea.Cmd) {
 			}
 		}
 		_ = config.Save(m.cfg)
+		m.status, m.statusKind = "Settings saved", "ok"
 	case "+", "=", "right", "l":
 		if m.settingsCursor == 1 {
 			m.cfg.RetentionDays++

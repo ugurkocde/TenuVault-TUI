@@ -100,6 +100,13 @@ type model struct {
 	prevScreen    screen
 	err           error
 	showHelp      bool
+	status        string // transient status message shown above the footer
+	statusKind    string // "ok" | "warn" | "err"
+
+	// hits records the screen-row of each clickable list item from the last
+	// render, so mouse clicks can be mapped to the right item. It is a pointer so
+	// the read-only View can populate what the next Update reads.
+	hits *uiHits
 
 	// connections
 	conns      []connection.Connection
@@ -184,6 +191,7 @@ type model struct {
 	syncItems        []syncer.Item
 	syncRunning      bool
 	syncMode         bool
+	syncGen          int // generation guard for stale lazy policy loads
 	syncCur          int
 	syncTot          int
 	syncResults      []syncer.Result
@@ -231,6 +239,7 @@ func New(cfg config.Config) model {
 		},
 		progEvents:   map[string]string{},
 		progFriendly: map[string]string{},
+		hits:         &uiHits{},
 	}
 }
 

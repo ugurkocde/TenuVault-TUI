@@ -84,7 +84,8 @@ in, the dashboard shows your tenant and last backup.
 
 Keys: `b` back up, `l` browse, `d` compare, `r` restore, `y` sync, `t` tenants,
 `s` settings, arrow keys / `j` `k` to move, `space` to toggle, `enter` to select,
-`esc` to go back, `q` to quit, `?` for help.
+`esc` to go back, `q` to quit, `?` for help. The mouse works too — click a list
+row to select it and scroll with the wheel.
 
 ## Tenant sync
 

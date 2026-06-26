@@ -20,6 +20,9 @@ func (m model) width0() int {
 
 func (m model) render() string {
 	w := m.width0()
+	if m.hits != nil {
+		*m.hits = uiHits{}
+	}
 	var body, hints string
 
 	switch m.screen {
@@ -71,12 +74,31 @@ func (m model) render() string {
 		body, hints = m.viewError(w), "enter continue"
 	}
 
+	if m.hits != nil {
+		m.finalizeHits()
+	}
+
 	header := m.header(w)
 	footer := m.th.footer.Render(hints)
 	if m.showHelp {
-		footer = m.th.footer.Render("global: ↑/↓ move · enter select · esc back · q quit · ctrl+c force quit · ? help")
+		footer = m.th.footer.Render("global: ↑/↓ move · enter select · esc back · q quit · ctrl+c force quit · ? help · mouse: click & scroll")
 	}
-	return header + "\n" + divider(w) + "\n\n" + body + "\n\n" + divider(w) + "\n" + footer
+	return header + "\n" + divider(w) + "\n\n" + body + "\n\n" + m.statusLine() + divider(w) + "\n" + footer
+}
+
+// statusLine renders the transient status message above the footer, or "".
+func (m model) statusLine() string {
+	if m.status == "" {
+		return ""
+	}
+	st := m.th.success
+	switch m.statusKind {
+	case "warn":
+		st = m.th.warn
+	case "err":
+		st = m.th.danger
+	}
+	return st.Render(m.status) + "\n"
 }
 
 func (m model) header(w int) string {
@@ -114,6 +136,7 @@ func (m model) viewAuth(w int) (string, string) {
 			cur = m.th.selected.Render("▸ ")
 			label = m.th.selected.Render(o.label)
 		}
+		m.recordHit(&b, i)
 		b.WriteString(cur + label + "\n")
 		b.WriteString("    " + m.th.dim.Render(o.desc) + "\n")
 	}
@@ -170,8 +193,9 @@ func (m model) viewDashboard(w int) string {
 		{"Tenants", "t"},
 		{"Settings", "s"},
 	}
-	var mb strings.Builder
-	mb.WriteString(m.th.cardLabel.Render("Quick actions") + "\n")
+	var b strings.Builder
+	b.WriteString(cards + "\n\n")
+	b.WriteString(m.th.cardLabel.Render("Quick actions") + "\n")
 	for i, it := range menu {
 		marker := m.th.dim.Render("▸")
 		label := m.th.normal.Render(it.label)
@@ -180,9 +204,10 @@ func (m model) viewDashboard(w int) string {
 			label = m.th.selected.Render(it.label)
 		}
 		row := marker + " " + label
-		mb.WriteString(spread(row, m.th.key.Render(it.key), w) + "\n")
+		m.recordHit(&b, i)
+		b.WriteString(spread(row, m.th.key.Render(it.key), w) + "\n")
 	}
-	return cards + "\n\n" + mb.String()
+	return b.String()
 }
 
 func (m model) viewBackupSelect(w int) string {
@@ -223,7 +248,11 @@ func (m model) viewBackupSelect(w int) string {
 		} else if !c.pt.Verified {
 			tag = "  " + m.th.cardLabel.Render("· unverified")
 		}
+		m.recordHit(&b, i)
 		b.WriteString("  " + box + " " + label + tag + "\n")
+	}
+	if sb := m.scrollbar(start, end, len(m.cats)); sb != "" {
+		b.WriteString("  " + sb + "\n")
 	}
 	b.WriteString("\n" + m.th.accent.Render(fmt.Sprintf("%d of %d selected", selected, len(m.cats))))
 	b.WriteString("  " + m.th.cardLabel.Render("→ "+m.cfg.BackupRoot))
@@ -298,7 +327,11 @@ func (m model) viewBrowse(w int) (string, string) {
 			name = m.th.selected.Render(bk.Folder)
 		}
 		meta := m.th.dim.Render(fmt.Sprintf("  %d policies · %s", bk.Total(), emptyDash(bk.Meta.Status)))
+		m.recordHit(&b, i)
 		b.WriteString(marker + name + meta + "\n")
+	}
+	if sb := m.scrollbar(start, end, len(m.backups)); sb != "" {
+		b.WriteString("  " + sb + "\n")
 	}
 	return b.String(), "↑/↓ move · enter select · esc back"
 }
@@ -322,6 +355,7 @@ func (m model) viewBrowseDetail(w int) string {
 			label = m.th.selected.Render(c.name)
 			marker = m.th.selected.Render("▸ ")
 		}
+		m.recordHit(&b, i)
 		b.WriteString(spread(marker+label, m.th.accent.Render(fmt.Sprintf("%d", c.count)), w/2) + "\n")
 	}
 	return b.String()
@@ -343,7 +377,11 @@ func (m model) viewCategoryPolicies(w int) string {
 			marker = m.th.selected.Render("▸ ")
 			name = m.th.selected.Render(p.Name)
 		}
+		m.recordHit(&b, i)
 		b.WriteString(marker + name + "\n")
+	}
+	if sb := m.scrollbar(start, end, len(m.catPolicies)); sb != "" {
+		b.WriteString("  " + sb + "\n")
 	}
 	return b.String()
 }
@@ -388,6 +426,7 @@ func (m model) viewSettings(w int) string {
 			marker = m.th.selected.Render("▸ ")
 			label = m.th.selected.Render(r.label)
 		}
+		m.recordHit(&b, i)
 		b.WriteString(spread(marker+label, m.th.accent.Render(r.value), min(w, 70)) + "\n")
 	}
 	b.WriteString("\n" + m.th.cardLabel.Render("backups → "+m.cfg.BackupRoot))
@@ -453,7 +492,11 @@ func (m model) viewRestorePick(w int) string {
 		if i == m.restoreCursor {
 			name = m.th.selected.Render(r.item.Name)
 		}
+		m.recordHit(&b, i)
 		b.WriteString(box + " " + m.th.cardLabel.Render(r.item.Category) + "  " + name + "\n")
+	}
+	if sb := m.scrollbar(start, end, len(m.restoreItems)); sb != "" {
+		b.WriteString("  " + sb + "\n")
 	}
 	b.WriteString("\n" + m.th.accent.Render(fmt.Sprintf("%d of %d selected", selected, len(m.restoreItems))))
 	return b.String()
@@ -554,6 +597,23 @@ func progBar(frac float64, width int) string {
 
 func m0pct(frac float64) string {
 	return lipgloss.NewStyle().Foreground(colPurple).Bold(true).Render(fmt.Sprintf("%d%%", int(frac*100)))
+}
+
+// scrollbar renders a compact position indicator for a windowed list, with
+// arrows that light up when there is more above or below.
+func (m model) scrollbar(start, end, total int) string {
+	if total == 0 || (start == 0 && end >= total) {
+		return ""
+	}
+	up := m.th.cardLabel.Render("↑")
+	if start > 0 {
+		up = m.th.accent.Render("↑")
+	}
+	down := m.th.cardLabel.Render("↓")
+	if end < total {
+		down = m.th.accent.Render("↓")
+	}
+	return m.th.cardLabel.Render(fmt.Sprintf("%d–%d of %d ", start+1, end, total)) + up + down
 }
 
 func window(cursor, total, size int) (int, int) {
