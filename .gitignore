@@ -1,0 +1,11 @@
+# Binaries
+/tenuvault
+/tenuvault.exe
+/dist/
+
+# Local backups (never commit tenant data)
+/TenuVault/
+*.backup
+
+# OS / editor
+.DS_Store

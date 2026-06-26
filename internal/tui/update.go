@@ -1,0 +1,449 @@
+package tui
+
+import (
+	"fmt"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
+	"github.com/ugurkocde/TenuVault-TUI/internal/restore"
+	"github.com/ugurkocde/TenuVault-TUI/internal/store"
+)
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		return m, nil
+
+	case tickMsg:
+		m.frame++
+		return m, tick()
+
+	case deviceCodeMsg:
+		m.deviceCode = string(msg)
+		return m, listen(m.ctx, m.ch)
+
+	case connectedMsg:
+		m.client = msg.client
+		m.tenant = msg.tenant
+		m.connected = true
+		m.goTo(screenDashboard)
+		return m, loadBackups(m.cfg.BackupRoot)
+
+	case errMsg:
+		m.err = msg.err
+		m.goTo(screenError)
+		return m, nil
+
+	case backupsLoadedMsg:
+		m.backups = []store.Backup(msg)
+		if len(m.backups) > 0 {
+			b := m.backups[0]
+			m.lastBackup = &b
+		}
+		return m, nil
+
+	case backupEventMsg:
+		m.applyBackupEvent(msg)
+		return m, listen(m.ctx, m.ch)
+
+	case backupDoneMsg:
+		m.progDone = true
+		if msg.err != nil {
+			m.progErr = msg.err
+		} else {
+			total := 0
+			for _, c := range msg.res.ItemCounts {
+				total += c
+			}
+			m.progResult = fmt.Sprintf("%d policies in %s", total, msg.res.Folder)
+		}
+		return m, loadBackups(m.cfg.BackupRoot)
+
+	case restoreDoneMsg:
+		m.restoreResults = msg.results
+		m.restoreRunning = false
+		m.goTo(screenRestoreResult)
+		return m, loadBackups(m.cfg.BackupRoot)
+
+	case diffDoneMsg:
+		m.diffChanges = msg.changes
+		m.diffScroll = 0
+		if msg.err != nil {
+			m.err = msg.err
+			m.goTo(screenError)
+			return m, nil
+		}
+		m.goTo(screenDiffResult)
+		return m, nil
+
+	case tea.KeyPressMsg:
+		return m.handleKey(msg)
+	}
+	return m, nil
+}
+
+func (m *model) applyBackupEvent(e backupEventMsg) {
+	if _, seen := m.progEvents[e.Category]; !seen {
+		m.progOrder = append(m.progOrder, e.Category)
+	}
+	m.progFriendly[e.Category] = e.Friendly
+	m.progActive = e.Friendly
+	m.progCur, m.progTot = e.Current, e.Total
+	switch {
+	case e.Err != nil:
+		m.progEvents[e.Category] = "err"
+	case e.Done:
+		m.progEvents[e.Category] = "done"
+	default:
+		m.progEvents[e.Category] = "running"
+	}
+}
+
+func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	if key == "ctrl+c" {
+		m.cancel()
+		return m, tea.Quit
+	}
+	if key == "?" {
+		m.showHelp = !m.showHelp
+		return m, nil
+	}
+
+	switch m.screen {
+	case screenAuth:
+		return m.keyAuth(key)
+	case screenConnecting:
+		if key == "esc" {
+			m.goTo(screenAuth)
+		}
+		return m, nil
+	case screenDashboard:
+		return m.keyDashboard(key)
+	case screenBackupSelect:
+		return m.keyBackupSelect(key)
+	case screenProgress:
+		if m.progDone && (key == "enter" || key == "esc") {
+			m.goTo(screenDashboard)
+		}
+		return m, nil
+	case screenBrowse:
+		return m.keyBrowse(key)
+	case screenBrowseDetail:
+		return m.keyBrowseDetail(key)
+	case screenDiffResult:
+		return m.keyDiffResult(key)
+	case screenRestorePick:
+		return m.keyRestorePick(key)
+	case screenRestoreConfirm:
+		return m.keyRestoreConfirm(key)
+	case screenRestoreResult:
+		if key == "enter" || key == "esc" || key == "q" {
+			m.goTo(screenDashboard)
+		}
+		return m, nil
+	case screenError:
+		if key == "enter" || key == "esc" {
+			m.err = nil
+			m.goTo(screenDashboard)
+			if !m.connected {
+				m.goTo(screenAuth)
+			}
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m model) keyAuth(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "up", "k":
+		if m.authCursor > 0 {
+			m.authCursor--
+		}
+	case "down", "j":
+		if m.authCursor < len(m.authOptions)-1 {
+			m.authCursor++
+		}
+	case "q":
+		return m, tea.Quit
+	case "enter":
+		m.cfg.AuthMethod = m.authOptions[m.authCursor].method
+		m.deviceCode = ""
+		m.goTo(screenConnecting)
+		return m, tea.Batch(connect(m.ctx, m.cfg, m.ch), listen(m.ctx, m.ch))
+	}
+	return m, nil
+}
+
+func (m model) keyDashboard(key string) (tea.Model, tea.Cmd) {
+	const items = 4
+	switch key {
+	case "up", "k":
+		if m.dashCursor > 0 {
+			m.dashCursor--
+		}
+	case "down", "j":
+		if m.dashCursor < items-1 {
+			m.dashCursor++
+		}
+	case "q":
+		return m, tea.Quit
+	case "b":
+		return m.startBackupSelect()
+	case "l":
+		return m.openBrowse(modeView, "Browse backups")
+	case "d":
+		return m.openBrowse(modeDiffA, "Compare · pick baseline (older)")
+	case "r":
+		return m.openBrowse(modeRestore, "Restore · pick a backup")
+	case "enter":
+		switch m.dashCursor {
+		case 0:
+			return m.startBackupSelect()
+		case 1:
+			return m.openBrowse(modeView, "Browse backups")
+		case 2:
+			return m.openBrowse(modeDiffA, "Compare · pick baseline (older)")
+		case 3:
+			return m.openBrowse(modeRestore, "Restore · pick a backup")
+		}
+	}
+	return m, nil
+}
+
+func (m model) startBackupSelect() (tea.Model, tea.Cmd) {
+	m.cats = nil
+	for _, pt := range catalog.All() {
+		m.cats = append(m.cats, catSel{pt: pt, sel: pt.Verified})
+	}
+	m.catCursor = 0
+	m.goTo(screenBackupSelect)
+	return m, nil
+}
+
+func (m model) openBrowse(mode browseMode, title string) (tea.Model, tea.Cmd) {
+	m.browseMode = mode
+	m.browseTitle = title
+	m.browseCursor = 0
+	m.diffA, m.diffB = nil, nil
+	m.goTo(screenBrowse)
+	return m, loadBackups(m.cfg.BackupRoot)
+}
+
+func (m model) keyBackupSelect(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "up", "k":
+		if m.catCursor > 0 {
+			m.catCursor--
+		}
+	case "down", "j":
+		if m.catCursor < len(m.cats)-1 {
+			m.catCursor++
+		}
+	case " ", "space":
+		m.cats[m.catCursor].sel = !m.cats[m.catCursor].sel
+	case "a":
+		all := true
+		for _, c := range m.cats {
+			if !c.sel {
+				all = false
+				break
+			}
+		}
+		for i := range m.cats {
+			m.cats[i].sel = !all
+		}
+	case "esc":
+		m.goTo(screenDashboard)
+	case "q":
+		m.goTo(screenDashboard)
+	case "enter":
+		types := m.selectedTypes()
+		if len(types) == 0 {
+			return m, nil
+		}
+		m.progTitle = "Backing up"
+		m.progEvents = map[string]string{}
+		m.progFriendly = map[string]string{}
+		m.progOrder = nil
+		m.progActive, m.progCur, m.progTot = "", 0, 0
+		m.progDone, m.progErr, m.progResult = false, nil, ""
+		m.goTo(screenProgress)
+		return m, tea.Batch(runBackup(m.ctx, m.client, types, m.cfg.BackupRoot, m.tenant, m.ch), listen(m.ctx, m.ch))
+	}
+	return m, nil
+}
+
+func (m model) keyBrowse(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "up", "k":
+		if m.browseCursor > 0 {
+			m.browseCursor--
+		}
+	case "down", "j":
+		if m.browseCursor < len(m.backups)-1 {
+			m.browseCursor++
+		}
+	case "esc", "q":
+		m.goTo(screenDashboard)
+	case "enter":
+		if len(m.backups) == 0 {
+			return m, nil
+		}
+		b := m.backups[m.browseCursor]
+		switch m.browseMode {
+		case modeView:
+			m.detail = &b
+			m.detailCats = scanCategories(b)
+			m.goTo(screenBrowseDetail)
+		case modeRestore:
+			m.restoreBackup = &b
+			m.restoreItems = buildRestoreItems(b)
+			m.restoreCursor, m.restoreScroll = 0, 0
+			m.goTo(screenRestorePick)
+		case modeDiffA:
+			a := b
+			m.diffA = &a
+			m.browseMode = modeDiffB
+			m.browseTitle = "Compare · pick target (newer)"
+		case modeDiffB:
+			t := b
+			m.diffB = &t
+			older, newer := orderBackups(m.diffA, m.diffB)
+			return m, runDiff(older, newer)
+		}
+	}
+	return m, nil
+}
+
+func (m model) keyBrowseDetail(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc":
+		m.goTo(screenBrowse)
+	case "q":
+		m.goTo(screenDashboard)
+	case "r":
+		if m.detail != nil {
+			b := *m.detail
+			m.restoreBackup = &b
+			m.restoreItems = buildRestoreItems(b)
+			m.restoreCursor, m.restoreScroll = 0, 0
+			m.goTo(screenRestorePick)
+		}
+	}
+	return m, nil
+}
+
+func (m model) keyDiffResult(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "up", "k":
+		if m.diffScroll > 0 {
+			m.diffScroll--
+		}
+	case "down", "j":
+		if m.diffScroll < len(m.diffChanges)-1 {
+			m.diffScroll++
+		}
+	case "esc", "q":
+		m.goTo(screenDashboard)
+	}
+	return m, nil
+}
+
+func (m model) keyRestorePick(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "up", "k":
+		if m.restoreCursor > 0 {
+			m.restoreCursor--
+		}
+	case "down", "j":
+		if m.restoreCursor < len(m.restoreItems)-1 {
+			m.restoreCursor++
+		}
+	case " ", "space":
+		if len(m.restoreItems) > 0 {
+			m.restoreItems[m.restoreCursor].sel = !m.restoreItems[m.restoreCursor].sel
+		}
+	case "a":
+		all := true
+		for _, r := range m.restoreItems {
+			if !r.sel {
+				all = false
+				break
+			}
+		}
+		for i := range m.restoreItems {
+			m.restoreItems[i].sel = !all
+		}
+	case "esc", "q":
+		m.goTo(screenDashboard)
+	case "enter":
+		if len(m.selectedRestoreItems()) == 0 {
+			return m, nil
+		}
+		m.goTo(screenRestoreConfirm)
+	}
+	return m, nil
+}
+
+func (m model) keyRestoreConfirm(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "y":
+		items := m.selectedRestoreItems()
+		if len(items) == 0 {
+			m.goTo(screenRestorePick)
+			return m, nil
+		}
+		m.restoreRunning = true
+		m.restoreResults = nil
+		return m, tea.Batch(runRestore(m.ctx, m.client, items, m.ch), listen(m.ctx, m.ch))
+	case "n", "esc":
+		m.goTo(screenRestorePick)
+	}
+	return m, nil
+}
+
+// scanCategories counts policy files per category in a backup.
+func scanCategories(b store.Backup) []catCount {
+	cats, _ := b.Categories()
+	var out []catCount
+	for _, c := range cats {
+		files, _ := b.Policies(c)
+		out = append(out, catCount{name: c, count: len(files)})
+	}
+	return out
+}
+
+// buildRestoreItems flattens all policies in a backup into restore items.
+func buildRestoreItems(b store.Backup) []restoreSel {
+	cats, _ := b.Categories()
+	var out []restoreSel
+	for _, c := range cats {
+		files, _ := b.Policies(c)
+		for _, f := range files {
+			out = append(out, restoreSel{item: restore.Item{Category: c, Name: f.Name, Path: f.Path}})
+		}
+	}
+	return out
+}
+
+// orderBackups returns (older, newer) by folder name. It tolerates nil inputs
+// so a stray navigation can never panic.
+func orderBackups(a, b *store.Backup) (store.Backup, store.Backup) {
+	if a == nil && b == nil {
+		return store.Backup{}, store.Backup{}
+	}
+	if a == nil {
+		return *b, *b
+	}
+	if b == nil {
+		return *a, *a
+	}
+	if a.Folder <= b.Folder {
+		return *a, *b
+	}
+	return *b, *a
+}
