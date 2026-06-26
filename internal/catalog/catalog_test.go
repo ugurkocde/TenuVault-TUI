@@ -23,10 +23,10 @@ func TestCategoryRestoreSupported(t *testing.T) {
 	if !CategoryRestoreSupported("AppProtectionPolicies") {
 		t.Error("AppProtectionPolicies should be restorable")
 	}
-	// Backup-only categories (need multi-part creates).
-	for _, c := range []string{"GroupPolicyConfigurations", "EndpointSecurityIntents"} {
-		if CategoryRestoreSupported(c) {
-			t.Errorf("%s should be backup-only", c)
+	// Multi-part create types are now restorable too.
+	for _, c := range []string{"GroupPolicyConfigurations", "EndpointSecurityIntents", "EnrollmentConfigurations"} {
+		if !CategoryRestoreSupported(c) {
+			t.Errorf("%s should be restorable", c)
 		}
 	}
 	if CategoryRestoreSupported("Nonexistent") {

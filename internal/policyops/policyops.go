@@ -27,6 +27,27 @@ func FetchFull(ctx context.Context, c *graph.Client, pt catalog.PolicyType, item
 	warn := false
 	id := IDOf(item)
 
+	// Administrative templates need a two-level fetch (Graph caps $expand depth
+	// at 1): definitionValues with their definition, then each value's
+	// presentationValues with their presentation.
+	if pt.CreateMode == "groupPolicy" && id != "" {
+		dvs, err := c.ListAll(ctx, pt.Version, pt.ListPath+"/"+id+"/definitionValues", url.Values{"$expand": {"definition"}})
+		if err != nil {
+			warn = true
+		} else {
+			enriched := make([]json.RawMessage, 0, len(dvs))
+			for _, dv := range dvs {
+				if dvID := IDOf(dv); dvID != "" {
+					if pvs, perr := c.ListAll(ctx, pt.Version, pt.ListPath+"/"+id+"/definitionValues/"+dvID+"/presentationValues", url.Values{"$expand": {"presentation"}}); perr == nil {
+						dv = embed(dv, "presentationValues", pvs)
+					}
+				}
+				enriched = append(enriched, dv)
+			}
+			full = embed(full, "definitionValues", enriched)
+		}
+	}
+
 	if pt.DetailByID && id != "" {
 		var q url.Values
 		if pt.Expand != "" {
@@ -71,20 +92,26 @@ var readOnlyKeys = map[string]bool{
 	"supportsScopeTags":    true,
 }
 
-// PrepareCreate cleans a policy and resolves the endpoint to create it at. A
-// non-empty namePrefix is prepended to the display name (empty keeps the
-// original name). Backup-only types and unroutable items return an error.
-func PrepareCreate(category string, raw json.RawMessage, namePrefix string) (version, endpoint string, body json.RawMessage, err error) {
+const graphBeta = "https://graph.microsoft.com/beta"
+
+// route resolves the policy type for a category and enforces restore support.
+func route(category string, raw json.RawMessage) (catalog.PolicyType, error) {
 	pt, ok := routeByType(category, raw)
 	if !ok {
 		if category == "AppProtectionPolicies" {
-			return "", "", nil, fmt.Errorf("unrecognized app protection type %q", odataTypeOf(raw))
+			return pt, fmt.Errorf("unrecognized app protection type %q", odataTypeOf(raw))
 		}
-		return "", "", nil, fmt.Errorf("no create route for category %q", category)
+		return pt, fmt.Errorf("no create route for category %q", category)
 	}
 	if !pt.RestoreSupported {
-		return "", "", nil, fmt.Errorf("%s is backup-only; create is not supported", pt.Friendly)
+		return pt, fmt.Errorf("%s is backup-only; create is not supported", pt.Friendly)
 	}
+	return pt, nil
+}
+
+// cleanForCreate strips read-only fields and OData annotations, applies the name
+// prefix, and (for Conditional Access) forces a disabled state.
+func cleanForCreate(raw json.RawMessage, namePrefix string, caDisable bool) map[string]any {
 	cleaned := jsonutil.StripKeysFunc(mustMap(raw), func(k string) bool {
 		return readOnlyKeys[k] || jsonutil.IsODataAnnotation(k)
 	})
@@ -102,24 +129,192 @@ func PrepareCreate(category string, raw json.RawMessage, namePrefix string) (ver
 			}
 		}
 	}
-	// Conditional Access is created disabled so a copy never locks admins out.
-	if category == "ConditionalAccessPolicies" {
+	if caDisable {
 		m["state"] = "disabled"
 	}
-	out, err := json.Marshal(m)
+	return m
+}
+
+// PrepareCreate cleans a simple policy and resolves its create endpoint. A
+// non-empty namePrefix is prepended to the display name (empty keeps it).
+func PrepareCreate(category string, raw json.RawMessage, namePrefix string) (version, endpoint string, body json.RawMessage, err error) {
+	pt, err := route(category, raw)
+	if err != nil {
+		return "", "", nil, err
+	}
+	out, err := json.Marshal(cleanForCreate(raw, namePrefix, category == "ConditionalAccessPolicies"))
 	if err != nil {
 		return "", "", nil, err
 	}
 	return pt.Version, pt.RestoreEndpoint(), out, nil
 }
 
-// Create cleans and POSTs a policy to the client, returning the new id.
+// Create creates a policy in the target tenant, returning the new id. It
+// dispatches by the type's CreateMode (simple POST, admin-template multi-part,
+// or endpoint-security intent createInstance).
 func Create(ctx context.Context, c *graph.Client, category string, raw json.RawMessage, namePrefix string) (string, error) {
-	version, endpoint, body, err := PrepareCreate(category, raw, namePrefix)
+	pt, err := route(category, raw)
 	if err != nil {
 		return "", err
 	}
-	created, err := c.Post(ctx, version, endpoint, body)
+	switch pt.CreateMode {
+	case "groupPolicy":
+		return createGroupPolicy(ctx, c, pt, raw, namePrefix)
+	case "intent":
+		return createIntent(ctx, c, pt, raw, namePrefix)
+	default:
+		body, err := json.Marshal(cleanForCreate(raw, namePrefix, pt.Category == "ConditionalAccessPolicies"))
+		if err != nil {
+			return "", err
+		}
+		created, err := c.Post(ctx, pt.Version, pt.RestoreEndpoint(), body)
+		if err != nil {
+			return "", err
+		}
+		return IDOf(created), nil
+	}
+}
+
+// createGroupPolicy creates an administrative-template policy, then applies all
+// captured settings in one atomic updateDefinitionValues action. Each setting is
+// bound to Microsoft's global policy definition catalog (definition ids are
+// tenant-independent), with its presentation values nested.
+func createGroupPolicy(ctx context.Context, c *graph.Client, pt catalog.PolicyType, raw json.RawMessage, namePrefix string) (string, error) {
+	m := cleanForCreate(raw, namePrefix, false)
+	defVals, _ := m["definitionValues"].([]any)
+	delete(m, "definitionValues")
+
+	body, err := json.Marshal(m)
+	if err != nil {
+		return "", err
+	}
+	created, err := c.Post(ctx, pt.Version, pt.ListPath, body)
+	if err != nil {
+		return "", err
+	}
+	id := IDOf(created)
+	if len(defVals) == 0 {
+		return id, nil
+	}
+
+	added := make([]json.RawMessage, 0, len(defVals))
+	for _, dvAny := range defVals {
+		dv, ok := dvAny.(map[string]any)
+		if !ok {
+			continue
+		}
+		if b := buildDefinitionValue(dv); b != nil {
+			added = append(added, b)
+		}
+	}
+	update, err := json.Marshal(map[string]any{
+		"added":      added,
+		"updated":    []json.RawMessage{},
+		"deletedIds": []string{},
+	})
+	if err != nil {
+		return id, err
+	}
+	if _, err := c.Post(ctx, pt.Version, pt.ListPath+"/"+id+"/updateDefinitionValues", update); err != nil {
+		return id, fmt.Errorf("policy created, but its settings failed to apply: %w", err)
+	}
+	return id, nil
+}
+
+// buildDefinitionValue converts a captured definitionValue into an
+// updateDefinitionValues "added" entry with definition/presentation @odata.bind
+// references and nested presentation values.
+func buildDefinitionValue(dv map[string]any) json.RawMessage {
+	def, _ := dv["definition"].(map[string]any)
+	defID, _ := def["id"].(string)
+	if defID == "" {
+		return nil
+	}
+	configType := "policy"
+	if ct, ok := dv["configurationType"].(string); ok && ct != "" {
+		configType = ct
+	}
+	out := map[string]any{
+		"@odata.type":           "#microsoft.graph.groupPolicyDefinitionValue",
+		"enabled":               dv["enabled"],
+		"configurationType":     configType,
+		"definition@odata.bind": graphBeta + "/deviceManagement/groupPolicyDefinitions('" + defID + "')",
+	}
+	if pvs, ok := dv["presentationValues"].([]any); ok && len(pvs) > 0 {
+		outPvs := make([]any, 0, len(pvs))
+		for _, pvAny := range pvs {
+			pv, ok := pvAny.(map[string]any)
+			if !ok {
+				continue
+			}
+			pres, _ := pv["presentation"].(map[string]any)
+			presID, _ := pres["id"].(string)
+			np := map[string]any{}
+			for k, v := range pv {
+				switch k {
+				case "presentation", "id", "createdDateTime", "lastModifiedDateTime":
+					continue
+				}
+				np[k] = v
+			}
+			if presID != "" {
+				np["presentation@odata.bind"] = graphBeta + "/deviceManagement/groupPolicyDefinitions('" + defID + "')/presentations('" + presID + "')"
+			}
+			outPvs = append(outPvs, np)
+		}
+		out["presentationValues"] = outPvs
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// createIntent recreates an endpoint-security/baseline intent from its template
+// via createInstance, carrying the captured settings as settingsDelta.
+func createIntent(ctx context.Context, c *graph.Client, pt catalog.PolicyType, raw json.RawMessage, namePrefix string) (string, error) {
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return "", err
+	}
+	templateID, _ := m["templateId"].(string)
+	if templateID == "" {
+		return "", fmt.Errorf("intent has no templateId; cannot recreate")
+	}
+	name, _ := m["displayName"].(string)
+	if namePrefix != "" && !strings.HasPrefix(name, namePrefix) {
+		name = namePrefix + name
+	}
+	var settingsDelta []any
+	if settings, ok := m["settings"].([]any); ok {
+		for _, sAny := range settings {
+			s, ok := sAny.(map[string]any)
+			if !ok {
+				continue
+			}
+			ns := map[string]any{}
+			for k, v := range s {
+				if k == "id" {
+					continue
+				}
+				ns[k] = v
+			}
+			settingsDelta = append(settingsDelta, ns)
+		}
+	}
+	body := map[string]any{"displayName": name, "settingsDelta": settingsDelta}
+	if d, ok := m["description"].(string); ok {
+		body["description"] = d
+	}
+	if r, ok := m["roleScopeTagIds"]; ok {
+		body["roleScopeTagIds"] = r
+	}
+	out, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+	created, err := c.Post(ctx, pt.Version, "/deviceManagement/templates/"+templateID+"/createInstance", out)
 	if err != nil {
 		return "", err
 	}

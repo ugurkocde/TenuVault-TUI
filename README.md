@@ -43,9 +43,10 @@ notification templates, assignment filters), apps (app configuration,
 app protection for iOS/Android/Windows, Windows information protection, app
 categories), and conditional access.
 
-Administrative templates, security-baseline intents, and enrollment
-configurations are backup-only (they require multi-part creates and are
-excluded from restore for safety).
+All types are restorable. Administrative templates and endpoint-security
+baselines use multi-part creates (the policy plus its settings, applied via
+`updateDefinitionValues` / `createInstance`); enrollment configurations restore
+best-effort (default/singleton configs can't be recreated).
 
 ## Install
 

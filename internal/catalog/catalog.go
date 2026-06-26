@@ -33,6 +33,11 @@ type PolicyType struct {
 	Expand     string       // $expand applied to the per-item detail fetch
 	Sub        *SubResource // optional nested collection to embed
 
+	// CreateMode selects the restore/create strategy: "" = simple POST,
+	// "groupPolicy" = config + per-setting definitionValues, "intent" = template
+	// createInstance with settingsDelta.
+	CreateMode string
+
 	RestoreSupported bool // false = backup-only (complex/upload/singleton)
 	Verified         bool // confirmed live via Lokka
 }
@@ -50,14 +55,13 @@ func All() []PolicyType {
 			ListPath: "/deviceManagement/configurationPolicies", NameField: "name", DetailByID: true, Expand: "settings", RestoreSupported: true, Verified: true},
 		{Key: "groupPolicyConfigurations", Friendly: "Administrative templates", Category: "GroupPolicyConfigurations", Group: "Configuration", Version: "beta",
 			ListPath: "/deviceManagement/groupPolicyConfigurations", NameField: "displayName",
-			Sub:              &SubResource{Suffix: "definitionValues", Expand: "presentationValues($expand=presentation),definition", EmbedKey: "definitionValues"},
-			RestoreSupported: false, Verified: true},
+			CreateMode: "groupPolicy", RestoreSupported: true, Verified: true},
 		{Key: "compliancePolicies", Friendly: "Compliance policies", Category: "CompliancePolicies", Group: "Configuration", Version: "beta",
 			ListPath: "/deviceManagement/deviceCompliancePolicies", NameField: "displayName", DetailByID: true, Expand: "scheduledActionsForRule", RestoreSupported: true, Verified: true},
 		{Key: "intents", Friendly: "Endpoint security / baselines", Category: "EndpointSecurityIntents", Group: "Configuration", Version: "beta",
 			ListPath: "/deviceManagement/intents", NameField: "displayName",
-			Sub:              &SubResource{Suffix: "settings", EmbedKey: "settings"},
-			RestoreSupported: false, Verified: true},
+			Sub:        &SubResource{Suffix: "settings", EmbedKey: "settings"},
+			CreateMode: "intent", RestoreSupported: true, Verified: true},
 
 		// --- Scripts & remediations (content only on per-item GET) ---
 		{Key: "deviceManagementScripts", Friendly: "Windows scripts", Category: "DeviceManagementScripts", Group: "Scripts", Version: "beta",

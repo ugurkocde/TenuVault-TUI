@@ -3,6 +3,8 @@ package policyops
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
 )
 
 func TestPrepareCreateCleansAndPrefixes(t *testing.T) {
@@ -63,10 +65,10 @@ func TestPrepareConditionalAccessDisabled(t *testing.T) {
 	}
 }
 
-func TestBackupOnlyRejected(t *testing.T) {
-	raw := []byte(`{"id":"1","displayName":"Template"}`)
-	if _, _, _, err := PrepareCreate("GroupPolicyConfigurations", raw, ""); err == nil {
-		t.Error("group policy configurations should be rejected as backup-only")
+func TestUnknownCategoryRejected(t *testing.T) {
+	raw := []byte(`{"id":"1","displayName":"x"}`)
+	if _, _, _, err := PrepareCreate("NoSuchCategory", raw, ""); err == nil {
+		t.Error("unknown category should be rejected")
 	}
 }
 
@@ -75,5 +77,56 @@ func TestRouteAppProtectionByODataType(t *testing.T) {
 	pt, ok := routeByType("AppProtectionPolicies", ios)
 	if !ok || pt.Key != "iosAppProtection" {
 		t.Errorf("ios routing failed: %+v ok=%v", pt, ok)
+	}
+}
+
+func TestBuildDefinitionValue(t *testing.T) {
+	dv := map[string]any{
+		"enabled":    true,
+		"id":         "dv-id",
+		"definition": map[string]any{"id": "def-guid", "displayName": "Some setting"},
+		"presentationValues": []any{
+			map[string]any{
+				"@odata.type":  "#microsoft.graph.groupPolicyPresentationValueText",
+				"value":        "hello",
+				"id":           "pv-id",
+				"presentation": map[string]any{"id": "pres-guid"},
+			},
+		},
+	}
+	body := buildDefinitionValue(dv)
+	if body == nil {
+		t.Fatal("nil body")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["definition@odata.bind"] != graphBeta+"/deviceManagement/groupPolicyDefinitions('def-guid')" {
+		t.Errorf("definition bind = %v", m["definition@odata.bind"])
+	}
+	if m["enabled"] != true {
+		t.Error("enabled not carried")
+	}
+	pvs := m["presentationValues"].([]any)
+	pv := pvs[0].(map[string]any)
+	if pv["value"] != "hello" {
+		t.Errorf("value = %v", pv["value"])
+	}
+	if pv["presentation@odata.bind"] != graphBeta+"/deviceManagement/groupPolicyDefinitions('def-guid')/presentations('pres-guid')" {
+		t.Errorf("presentation bind = %v", pv["presentation@odata.bind"])
+	}
+	if _, ok := pv["presentation"]; ok {
+		t.Error("nested presentation object should be removed")
+	}
+	if _, ok := pv["id"]; ok {
+		t.Error("presentation value id should be removed")
+	}
+}
+
+func TestCreateIntentRequiresTemplate(t *testing.T) {
+	raw := []byte(`{"id":"1","displayName":"x","settings":[]}`)
+	if _, err := createIntent(nil, nil, catalog.PolicyType{Version: "beta"}, raw, ""); err == nil {
+		t.Error("expected error when templateId is missing")
 	}
 }
