@@ -70,7 +70,7 @@ TenuVault TUI ${VERSION}
 Move 'tenuvault' to a directory on your PATH, e.g.:
   sudo mv tenuvault /usr/local/bin/
 
-Or install via the .pkg, or: brew install ugurkocde/tap/tenuvault
+Or install via the .pkg, or: brew install ugurkocde/UgurLabs/tenuvault
 EOF
 hdiutil create -volname "TenuVault ${VERSION}" -srcfolder "$DMGSTAGE" \
   -ov -format UDZO "$WORK/tenuvault.dmg" >/dev/null

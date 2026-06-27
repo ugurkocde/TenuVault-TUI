@@ -51,20 +51,21 @@ them, and attaches them to the release. If unset, the DMG/PKG step is skipped.
 
 ## Homebrew tap (optional)
 
-To publish a `brew install` formula:
+To publish a `brew install` cask:
 
-1. Create a public repo named `homebrew-tap` under your account
-   (`github.com/ugurkocde/homebrew-tap`).
+1. A public tap repo `homebrew-UgurLabs` under your account
+   (`github.com/ugurkocde/homebrew-UgurLabs`) holds the cask. One tap repo can
+   host many tools — each lands as its own file under `Casks/`.
 2. Add a secret with a token that can push to it:
 
 | Secret | What it is |
 | --- | --- |
-| `HOMEBREW_TAP_TOKEN` | A fine-grained PAT (or classic PAT with `repo` scope) that has **write** access to `ugurkocde/homebrew-tap` |
+| `HOMEBREW_TAP_TOKEN` | A fine-grained PAT (or classic PAT with `repo` scope) that has **write** access to `ugurkocde/homebrew-UgurLabs` |
 
 Then users install with:
 
 ```sh
-brew install ugurkocde/tap/tenuvault
+brew install ugurkocde/UgurLabs/tenuvault
 ```
 
 If `HOMEBREW_TAP_TOKEN` is unset, the formula step is skipped automatically.

@@ -53,7 +53,7 @@ best-effort (default/singleton configs can't be recreated).
 Homebrew (macOS):
 
 ```sh
-brew install ugurkocde/tap/tenuvault
+brew install ugurkocde/UgurLabs/tenuvault
 ```
 
 On macOS you can also download a signed, notarized **`.pkg`** installer (installs

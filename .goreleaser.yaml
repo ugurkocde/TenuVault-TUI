@@ -56,7 +56,7 @@ homebrew_casks:
   - name: tenuvault
     repository:
       owner: ugurkocde
-      name: homebrew-tap
+      name: homebrew-UgurLabs
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: "https://github.com/ugurkocde/TenuVault-TUI"
     description: "Terminal UI for backing up and restoring Microsoft Intune via Microsoft Graph"
