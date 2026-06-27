@@ -10,7 +10,12 @@ permissions:
 
 jobs:
   goreleaser:
-    runs-on: ubuntu-latest
+    # macOS runner: required to build/sign the DMG and PKG (hdiutil, pkgbuild,
+    # productsign). GoReleaser still builds all platforms here.
+    runs-on: macos-latest
+    env:
+      # Whether the Developer ID Installer cert is configured; gates DMG/PKG.
+      HAS_INSTALLER_CERT: ${{ secrets.MACOS_INSTALLER_P12 != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,6 +27,45 @@ jobs:
         with:
           go-version: stable
 
+      # Imports the Developer ID Application + Installer certs into a temp
+      # keychain and creates a notarytool profile, for the DMG/PKG step. Skipped
+      # if the installer cert secret isn't configured (see SECRETS.md).
+      - name: Set up signing keychain
+        if: ${{ env.HAS_INSTALLER_CERT == 'true' }}
+        env:
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_INSTALLER_P12: ${{ secrets.MACOS_INSTALLER_P12 }}
+          MACOS_INSTALLER_PASSWORD: ${{ secrets.MACOS_INSTALLER_PASSWORD }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          APP_P12="$RUNNER_TEMP/app.p12"
+          INST_P12="$RUNNER_TEMP/installer.p12"
+          NOTARY_KEY="$RUNNER_TEMP/notary.p8"
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          KCPASS="$(openssl rand -base64 24)"
+
+          echo -n "$MACOS_SIGN_P12" | base64 --decode -o "$APP_P12"
+          echo -n "$MACOS_INSTALLER_P12" | base64 --decode -o "$INST_P12"
+          echo -n "$MACOS_NOTARY_KEY" | base64 --decode -o "$NOTARY_KEY"
+
+          security create-keychain -p "$KCPASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KCPASS" "$KEYCHAIN"
+          security import "$APP_P12" -P "$MACOS_SIGN_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security import "$INST_P12" -P "$MACOS_INSTALLER_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KCPASS" "$KEYCHAIN" >/dev/null
+          security list-keychain -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          xcrun notarytool store-credentials "tenuvault-notary" \
+            --key "$NOTARY_KEY" --key-id "$MACOS_NOTARY_KEY_ID" --issuer "$MACOS_NOTARY_ISSUER_ID" \
+            --keychain "$KEYCHAIN"
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN" >> "$GITHUB_ENV"
+          echo "MACOS_NOTARY_PROFILE_NAME=tenuvault-notary" >> "$GITHUB_ENV"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -29,8 +73,7 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS Developer ID signing + notarization (optional — release builds
-          # unsigned if these are unset). See SECRETS.md.
+          # Bare-binary Developer ID signing + notarization (optional). See SECRETS.md.
           MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
           MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
@@ -38,3 +81,23 @@ jobs:
           MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
           # Homebrew tap publishing (optional). See SECRETS.md.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      # Build signed + notarized .dmg and .pkg from the binaries GoReleaser
+      # produced, and attach them to the release.
+      - name: Build and upload DMG + PKG
+        if: ${{ env.HAS_INSTALLER_CERT == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          for arch in arm64 amd64; do
+            dest="$RUNNER_TEMP/bin-$arch"; mkdir -p "$dest"
+            tar -xzf "dist/tenuvault_${VERSION}_darwin_${arch}.tar.gz" -C "$dest" tenuvault
+            APP_IDENTITY="Developer ID Application: Ugur Koc (D259ULY2B4)" \
+            INSTALLER_IDENTITY="Developer ID Installer: Ugur Koc (D259ULY2B4)" \
+            NOTARY_PROFILE="$MACOS_NOTARY_PROFILE_NAME" \
+            KEYCHAIN="$KEYCHAIN_PATH" OUTDIR=dist-macos \
+            bash scripts/macos-package.sh "$VERSION" "$arch" "$dest/tenuvault"
+          done
+          gh release upload "$GITHUB_REF_NAME" dist-macos/*.dmg dist-macos/*.pkg --clobber

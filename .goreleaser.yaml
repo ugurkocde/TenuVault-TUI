@@ -22,9 +22,20 @@ builds:
     ldflags:
       - -s -w -X main.version={{ .Version }}
 
-# macOS Developer ID signing + notarization. Runs on any OS (no macOS runner
-# needed). No-ops when the signing secrets are absent, so unsigned releases still
-# build. See SECRETS.md for the required GitHub secrets.
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+# macOS Developer ID signing + notarization of the bare binaries (runs anywhere,
+# no-ops without secrets). The DMG and PKG installers are built and signed
+# separately on the macOS runner (scripts/macos-package.sh) — GoReleaser OSS has
+# no DMG/PKG support.
 notarize:
   macos:
     - enabled: '{{ if .Env.MACOS_SIGN_P12 }}true{{ else }}false{{ end }}'
@@ -40,17 +51,7 @@ notarize:
         wait: true
         timeout: 30m
 
-archives:
-  - id: default
-    formats:
-      - tar.gz
-    format_overrides:
-      - goos: windows
-        formats:
-          - zip
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-
-# Homebrew tap (macOS cask). Skips upload unless a tap token is configured.
+# Homebrew tap (cask installs the binary). Skips upload unless a tap token is set.
 homebrew_casks:
   - name: tenuvault
     repository:

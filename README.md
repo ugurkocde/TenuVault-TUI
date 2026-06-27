@@ -56,6 +56,9 @@ Homebrew (macOS):
 brew install ugurkocde/tap/tenuvault
 ```
 
+On macOS you can also download a signed, notarized **`.pkg`** installer (installs
+`tenuvault` to `/usr/local/bin`) or a **`.dmg`** from the Releases page.
+
 Or download a release binary for your platform from the Releases page, or build
 from source:
 
