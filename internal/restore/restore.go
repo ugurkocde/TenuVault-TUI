@@ -33,7 +33,7 @@ type Result struct {
 func Plan(b store.Backup, selection []Item) []Item { return selection }
 
 // Restore creates each item in Graph and returns per-item results.
-func Restore(ctx context.Context, c *graph.Client, items []Item) []Result {
+func Restore(ctx context.Context, c graph.API, items []Item) []Result {
 	results := make([]Result, 0, len(items))
 	for _, it := range items {
 		res := Result{Item: it}

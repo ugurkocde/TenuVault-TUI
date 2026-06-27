@@ -24,6 +24,15 @@ const (
 	baseBeta = "https://graph.microsoft.com/beta"
 )
 
+// API is the subset of Graph operations the engines use. It lets backup,
+// restore, and sync be tested against a fake without network access.
+type API interface {
+	Get(ctx context.Context, version, path string, query url.Values) (json.RawMessage, error)
+	ListAll(ctx context.Context, version, path string, query url.Values) ([]json.RawMessage, error)
+	Post(ctx context.Context, version, path string, body json.RawMessage) (json.RawMessage, error)
+	Patch(ctx context.Context, version, path string, body json.RawMessage) (json.RawMessage, error)
+}
+
 // Client calls Microsoft Graph using a token credential and a fixed scope set.
 type Client struct {
 	cred   azcore.TokenCredential

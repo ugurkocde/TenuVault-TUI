@@ -42,7 +42,7 @@ type Event struct {
 // the source tenant's client (used to fetch full policy content); it may be nil
 // when every item comes from a backup. namePrefix is prepended to copied policy
 // names ("" keeps the original name).
-func Run(ctx context.Context, target, source *graph.Client, items []Item, namePrefix string, progress func(Event)) []Result {
+func Run(ctx context.Context, target, source graph.API, items []Item, namePrefix string, progress func(Event)) []Result {
 	results := make([]Result, 0, len(items))
 	total := len(items)
 	for i, it := range items {
@@ -67,7 +67,7 @@ func Run(ctx context.Context, target, source *graph.Client, items []Item, namePr
 }
 
 // resolve returns the full policy JSON for an item from its source.
-func resolve(ctx context.Context, source *graph.Client, it Item) (json.RawMessage, error) {
+func resolve(ctx context.Context, source graph.API, it Item) (json.RawMessage, error) {
 	if it.Path != "" {
 		return store.Read(it.Path)
 	}

@@ -65,7 +65,7 @@ type Result struct {
 // Run backs up the selected policy types into the configured root, emitting
 // progress events. It never aborts the whole run on a single category failure;
 // each category's outcome is captured in the result and the on-disk log.
-func Run(ctx context.Context, c *graph.Client, types []catalog.PolicyType, opts Options, progress func(Event)) (Result, error) {
+func Run(ctx context.Context, c graph.API, types []catalog.PolicyType, opts Options, progress func(Event)) (Result, error) {
 	start := time.Now()
 	folder := "backup-" + start.Format("2006-01-02-150405")
 	path := filepath.Join(opts.Root, folder)

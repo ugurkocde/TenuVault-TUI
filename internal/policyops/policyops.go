@@ -22,7 +22,7 @@ import (
 // bodies, settings-catalog settings), nested sub-resources (admin-template
 // definition values, intent settings), and optionally assignments. The bool is
 // true if any enrichment was incomplete.
-func FetchFull(ctx context.Context, c *graph.Client, pt catalog.PolicyType, item json.RawMessage, includeAssignments bool) (json.RawMessage, bool) {
+func FetchFull(ctx context.Context, c graph.API, pt catalog.PolicyType, item json.RawMessage, includeAssignments bool) (json.RawMessage, bool) {
 	full := item
 	warn := false
 	id := IDOf(item)
@@ -152,7 +152,7 @@ func PrepareCreate(category string, raw json.RawMessage, namePrefix string) (ver
 // Create creates a policy in the target tenant, returning the new id. It
 // dispatches by the type's CreateMode (simple POST, admin-template multi-part,
 // or endpoint-security intent createInstance).
-func Create(ctx context.Context, c *graph.Client, category string, raw json.RawMessage, namePrefix string) (string, error) {
+func Create(ctx context.Context, c graph.API, category string, raw json.RawMessage, namePrefix string) (string, error) {
 	pt, err := route(category, raw)
 	if err != nil {
 		return "", err
@@ -179,12 +179,22 @@ func Create(ctx context.Context, c *graph.Client, category string, raw json.RawM
 // captured settings in one atomic updateDefinitionValues action. Each setting is
 // bound to Microsoft's global policy definition catalog (definition ids are
 // tenant-independent), with its presentation values nested.
-func createGroupPolicy(ctx context.Context, c *graph.Client, pt catalog.PolicyType, raw json.RawMessage, namePrefix string) (string, error) {
-	m := cleanForCreate(raw, namePrefix, false)
-	defVals, _ := m["definitionValues"].([]any)
-	delete(m, "definitionValues")
+func createGroupPolicy(ctx context.Context, c graph.API, pt catalog.PolicyType, raw json.RawMessage, namePrefix string) (string, error) {
+	// Pull the settings from the RAW policy first: cleanForCreate strips "id"
+	// recursively, which would destroy the definition/presentation ids the
+	// settings need to bind against.
+	var rawMap map[string]any
+	if err := json.Unmarshal(raw, &rawMap); err != nil {
+		return "", err
+	}
+	defVals, _ := rawMap["definitionValues"].([]any)
+	delete(rawMap, "definitionValues")
+	configRaw, err := json.Marshal(rawMap)
+	if err != nil {
+		return "", err
+	}
 
-	body, err := json.Marshal(m)
+	body, err := json.Marshal(cleanForCreate(configRaw, namePrefix, false))
 	if err != nil {
 		return "", err
 	}
@@ -273,7 +283,7 @@ func buildDefinitionValue(dv map[string]any) json.RawMessage {
 
 // createIntent recreates an endpoint-security/baseline intent from its template
 // via createInstance, carrying the captured settings as settingsDelta.
-func createIntent(ctx context.Context, c *graph.Client, pt catalog.PolicyType, raw json.RawMessage, namePrefix string) (string, error) {
+func createIntent(ctx context.Context, c graph.API, pt catalog.PolicyType, raw json.RawMessage, namePrefix string) (string, error) {
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return "", err
