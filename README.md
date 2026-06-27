@@ -50,7 +50,13 @@ best-effort (default/singleton configs can't be recreated).
 
 ## Install
 
-Download a release binary for your platform from the Releases page, or build
+Homebrew (macOS):
+
+```sh
+brew install ugurkocde/tap/tenuvault
+```
+
+Or download a release binary for your platform from the Releases page, or build
 from source:
 
 ```sh
@@ -88,6 +94,22 @@ Keys: `b` back up, `l` browse, `d` compare, `r` restore, `y` sync, `t` tenants,
 `s` settings, arrow keys / `j` `k` to move, `space` to toggle, `enter` to select,
 `esc` to go back, `q` to quit, `?` for help. The mouse works too — click a list
 row to select it and scroll with the wheel.
+
+## Headless (automation / CI)
+
+`backup` and `restore` run without the TUI for scheduling and pipelines. Use
+app-registration credentials (interactive sign-in needs a browser):
+
+```sh
+export AZURE_TENANT_ID=...   AZURE_CLIENT_ID=...   AZURE_CLIENT_SECRET=...
+
+tenuvault backup --out ./backups --assignments
+tenuvault backup --categories deviceConfigurations,compliancePolicies
+tenuvault restore --backup ./backups/backup-2026-06-27-020000 --prefix "[Restored] "
+```
+
+`backup` exits non-zero if a backup fails; `restore` exits non-zero if any
+policy fails to create. Tenant-to-tenant sync remains interactive (two tenants).
 
 ## Tenant sync
 

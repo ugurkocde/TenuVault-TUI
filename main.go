@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ugurkocde/TenuVault-TUI/internal/cli"
 	"github.com/ugurkocde/TenuVault-TUI/internal/config"
 	"github.com/ugurkocde/TenuVault-TUI/internal/tui"
 )
@@ -15,6 +16,16 @@ import (
 var version = "1.0.0"
 
 func main() {
+	// Headless subcommands for automation/CI; no args launches the TUI.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "backup":
+			os.Exit(cli.Backup(os.Args[2:]))
+		case "restore":
+			os.Exit(cli.Restore(os.Args[2:]))
+		}
+	}
+
 	var (
 		showVersion bool
 		tenant      string

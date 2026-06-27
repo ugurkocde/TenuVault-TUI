@@ -22,6 +22,24 @@ builds:
     ldflags:
       - -s -w -X main.version={{ .Version }}
 
+# macOS Developer ID signing + notarization. Runs on any OS (no macOS runner
+# needed). No-ops when the signing secrets are absent, so unsigned releases still
+# build. See SECRETS.md for the required GitHub secrets.
+notarize:
+  macos:
+    - enabled: '{{ if .Env.MACOS_SIGN_P12 }}true{{ else }}false{{ end }}'
+      ids:
+        - tenuvault
+      sign:
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
+        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
+        key: "{{ .Env.MACOS_NOTARY_KEY }}"
+        wait: true
+        timeout: 30m
+
 archives:
   - id: default
     formats:
@@ -31,6 +49,17 @@ archives:
         formats:
           - zip
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+# Homebrew tap (macOS cask). Skips upload unless a tap token is configured.
+homebrew_casks:
+  - name: tenuvault
+    repository:
+      owner: ugurkocde
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/ugurkocde/TenuVault-TUI"
+    description: "Terminal UI for backing up and restoring Microsoft Intune via Microsoft Graph"
+    skip_upload: '{{ if .Env.HOMEBREW_TAP_TOKEN }}false{{ else }}true{{ end }}'
 
 checksum:
   name_template: checksums.txt
