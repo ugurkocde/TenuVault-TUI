@@ -9,3 +9,6 @@
 
 # OS / editor
 .DS_Store
+
+# GoReleaser macOS DMG/PKG output
+dist-macos/

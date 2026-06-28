@@ -70,10 +70,34 @@ brew install ugurkocde/UgurLabs/tenuvault
 
 If `HOMEBREW_TAP_TOKEN` is unset, the formula step is skipped automatically.
 
+## Linux .deb / .rpm
+
+No setup needed. On every release, GoReleaser builds `.deb` and `.rpm` packages
+(via nfpm, no system tooling required) and attaches them to the GitHub Release.
+
+## winget (optional)
+
+To publish `winget install UgurKoc.TenuVault`, GoReleaser generates the manifest
+and opens a PR to `microsoft/winget-pkgs` from your fork:
+
+1. Fork `microsoft/winget-pkgs` to `github.com/ugurkocde/winget-pkgs`.
+2. Add a token that can push to the fork and open the cross-repo PR:
+
+| Secret | What it is |
+| --- | --- |
+| `WINGET_TOKEN` | A **classic** PAT with `public_repo` scope (fine-grained PATs generally can't open a PR to a repo you don't own). |
+
+On the next release, a PR is opened against `microsoft/winget-pkgs`; Microsoft's
+validation runs and a maintainer merges it (can take a few days). After that,
+`winget install UgurKoc.TenuVault` works. If `WINGET_TOKEN` is unset, the winget
+step is skipped automatically.
+
 ## Windows signing (later)
 
-Windows binaries are currently unsigned. When you have an Authenticode code
-signing certificate, we'll add a `signs` step for the Windows artifacts.
+Windows binaries are currently unsigned, so a direct download + run triggers a
+SmartScreen "unknown publisher" prompt (winget/Scoop installs avoid most of
+that friction). When you have an Authenticode certificate, we'll add a `signs`
+step for the Windows artifacts.
 
 ## Cutting a release
 

@@ -62,6 +62,50 @@ homebrew_casks:
     description: "Terminal UI for backing up and restoring Microsoft Intune via Microsoft Graph"
     skip_upload: '{{ if .Env.HOMEBREW_TAP_TOKEN }}false{{ else }}true{{ end }}'
 
+# Linux .deb / .rpm packages (apt / dnf). Built by nfpm (pure Go, no system
+# tooling needed) and attached to the release.
+nfpms:
+  - id: tenuvault
+    package_name: tenuvault
+    ids:
+      - tenuvault
+    vendor: Ugur Koc
+    homepage: "https://github.com/ugurkocde/TenuVault-TUI"
+    maintainer: "Ugur Koc <ugurkocde@users.noreply.github.com>"
+    description: "Terminal UI for backing up and restoring Microsoft Intune via Microsoft Graph"
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    file_name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+# Windows winget manifest. Generates the manifest and opens a PR to
+# microsoft/winget-pkgs (from your fork). Skips the PR unless WINGET_TOKEN is set.
+winget:
+  - name: tenuvault
+    publisher: UgurKoc
+    package_identifier: UgurKoc.TenuVault
+    license: MIT
+    copyright: "Copyright (c) 2026 Ugur Koc"
+    homepage: "https://github.com/ugurkocde/TenuVault-TUI"
+    short_description: "Terminal UI for backing up and restoring Microsoft Intune via Microsoft Graph"
+    description: |-
+      TenuVault TUI backs up, restores, compares, and syncs Microsoft Intune
+      configuration via Microsoft Graph, from a single terminal binary.
+    skip_upload: '{{ if .Env.WINGET_TOKEN }}false{{ else }}true{{ end }}'
+    repository:
+      owner: ugurkocde
+      name: winget-pkgs
+      branch: "tenuvault-{{ .Version }}"
+      token: "{{ .Env.WINGET_TOKEN }}"
+      pull_request:
+        enabled: true
+        base:
+          owner: microsoft
+          name: winget-pkgs
+          branch: master
+
 checksum:
   name_template: checksums.txt
 

@@ -75,8 +75,18 @@ to `/usr/local/bin`) or `.dmg` from the
 [latest release](https://github.com/ugurkocde/TenuVault-TUI/releases/latest).
 Both are Apple-notarized, so they open without Gatekeeper warnings.
 
-**Other platforms:** download a prebuilt binary for Linux or Windows (amd64 /
-arm64) from the [releases page](https://github.com/ugurkocde/TenuVault-TUI/releases/latest).
+**Linux:** download the `.deb` (Debian/Ubuntu) or `.rpm` (Fedora/RHEL) for your
+architecture from the [latest release](https://github.com/ugurkocde/TenuVault-TUI/releases/latest),
+or use the raw binary/tarball.
+
+```sh
+sudo dpkg -i tenuvault_*_linux_amd64.deb    # or: sudo rpm -i tenuvault_*_linux_amd64.rpm
+```
+
+**Windows:** download `tenuvault_*_windows_amd64.zip` (amd64 / arm64), extract,
+and run `tenuvault.exe`. The binary is currently unsigned, so Windows may show a
+SmartScreen prompt — choose "More info" then "Run anyway". A `winget` package is
+in progress.
 
 **With Go:**
 

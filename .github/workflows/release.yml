@@ -81,6 +81,8 @@ jobs:
           MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
           # Homebrew tap publishing (optional). See SECRETS.md.
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # winget manifest PR to microsoft/winget-pkgs (optional). See SECRETS.md.
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
 
       # Build signed + notarized .dmg and .pkg from the binaries GoReleaser
       # produced, and attach them to the release.
