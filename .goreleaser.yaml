@@ -84,8 +84,8 @@ nfpms:
 # microsoft/winget-pkgs (from your fork). Skips the PR unless WINGET_TOKEN is set.
 winget:
   - name: tenuvault
-    publisher: UgurKoc
-    package_identifier: UgurKoc.TenuVault
+    publisher: UgurLabs
+    package_identifier: UgurLabs.TenuVault
     license: MIT
     copyright: "Copyright (c) 2026 Ugur Koc"
     homepage: "https://github.com/ugurkocde/TenuVault-TUI"

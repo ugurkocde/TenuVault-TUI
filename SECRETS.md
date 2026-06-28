@@ -77,7 +77,7 @@ No setup needed. On every release, GoReleaser builds `.deb` and `.rpm` packages
 
 ## winget (optional)
 
-To publish `winget install UgurKoc.TenuVault`, GoReleaser generates the manifest
+To publish `winget install UgurLabs.TenuVault`, GoReleaser generates the manifest
 and opens a PR to `microsoft/winget-pkgs` from your fork:
 
 1. Fork `microsoft/winget-pkgs` to `github.com/ugurkocde/winget-pkgs`.
@@ -89,7 +89,7 @@ and opens a PR to `microsoft/winget-pkgs` from your fork:
 
 On the next release, a PR is opened against `microsoft/winget-pkgs`; Microsoft's
 validation runs and a maintainer merges it (can take a few days). After that,
-`winget install UgurKoc.TenuVault` works. If `WINGET_TOKEN` is unset, the winget
+`winget install UgurLabs.TenuVault` works. If `WINGET_TOKEN` is unset, the winget
 step is skipped automatically.
 
 ## Windows signing (later)
