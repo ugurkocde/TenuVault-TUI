@@ -38,6 +38,7 @@ type (
 		err     error
 	}
 	backupsLoadedMsg []store.Backup
+	cleanupDoneMsg   struct{ err error }
 )
 
 // listen reads the next streamed message from the channel, unblocking if the
@@ -62,8 +63,8 @@ func send(ctx context.Context, ch chan tea.Msg, msg tea.Msg) {
 	}
 }
 
-// connect builds the credential and client, then fetches the tenant. Device
-// code prompts are streamed through ch and shown on the connecting screen.
+// connect builds the credential and client, then fetches the tenant. Progress
+// and errors are streamed through ch and shown on the connecting screen.
 func connect(ctx context.Context, cfg config.Config, ch chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		go func() {
@@ -171,11 +172,12 @@ func runSync(ctx context.Context, target, source *graph.Client, items []syncer.I
 	}
 }
 
-// cleanupBackups deletes backups older than the retention window.
+// cleanupBackups deletes backups older than the retention window, reporting any
+// failure so it isn't silently swallowed.
 func cleanupBackups(root string, days int) tea.Cmd {
 	return func() tea.Msg {
-		_, _ = store.Cleanup(root, days)
-		return nil
+		_, err := store.Cleanup(root, days)
+		return cleanupDoneMsg{err: err}
 	}
 }
 

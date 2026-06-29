@@ -3,13 +3,14 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 )
 
 // WellKnownClientID is the Microsoft Graph PowerShell public client. It carries
-// broad pre-consented delegated permissions, so interactive and device-code
-// sign-in work with no app registration. Mirrors MgGraphCommunity's default.
+// broad pre-consented delegated permissions, so interactive sign-in works with
+// no app registration. Mirrors MgGraphCommunity's default.
 const WellKnownClientID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
 
 // AuthMethod selects how the TUI authenticates to Microsoft Graph.
@@ -17,7 +18,6 @@ type AuthMethod string
 
 const (
 	AuthInteractive AuthMethod = "interactive"
-	AuthDeviceCode  AuthMethod = "devicecode"
 	AuthSecret      AuthMethod = "secret"
 	AuthCertificate AuthMethod = "certificate"
 )
@@ -95,7 +95,12 @@ func Load() Config {
 	c := Default()
 	data, err := os.ReadFile(Path())
 	if err == nil {
-		_ = json.Unmarshal(data, &c)
+		// A corrupt config file shouldn't be silently ignored: warn so the user
+		// knows their saved settings weren't applied, then fall back to defaults.
+		if uerr := json.Unmarshal(data, &c); uerr != nil {
+			c = Default()
+			fmt.Fprintf(os.Stderr, "warning: ignoring invalid config at %s: %v\n", Path(), uerr)
+		}
 	}
 	// Env always wins for credentials so secrets never need to touch disk.
 	if v := os.Getenv("AZURE_TENANT_ID"); v != "" {
