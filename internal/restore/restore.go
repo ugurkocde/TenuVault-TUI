@@ -29,9 +29,6 @@ type Result struct {
 	Err   error
 }
 
-// Plan builds restore items from a selection.
-func Plan(b store.Backup, selection []Item) []Item { return selection }
-
 // Restore creates each item in Graph and returns per-item results.
 func Restore(ctx context.Context, c graph.API, items []Item) []Result {
 	results := make([]Result, 0, len(items))
