@@ -45,3 +45,17 @@ that dir to `PATH` for the session.
 - The core backup/restore/sync engines are exercised offline (no tenant) by the
   integration tests using the in-memory fake in `internal/graphtest`; run
   `go test ./internal/...` to validate engine behavior without credentials.
+
+### PowerShell (Pester / PSScriptAnalyzer)
+- PowerShell 7 (`pwsh`, currently 7.6.3) is installed from Microsoft's apt
+  repository (PMC) and lives at `/usr/bin/pwsh`. Verify with:
+  `pwsh -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'`.
+- The `Pester` and `PSScriptAnalyzer` modules are installed for the current user
+  (`~/.local/share/powershell/Modules`). Run tests with
+  `pwsh -NoLogo -NoProfile -Command "Invoke-Pester -Path <dir>"` and lint scripts
+  with `Invoke-ScriptAnalyzer -Path <file-or-dir>`.
+- These are installed in the VM snapshot. The startup update script also
+  re-installs them (guarded/idempotent/fail-safe) only if `pwsh` or a module is
+  missing, so it's a no-op on a normal start. If `Install-Module` ever prompts
+  about the untrusted PSGallery, run
+  `Set-PSRepository -Name PSGallery -InstallationPolicy Trusted` first.
