@@ -115,6 +115,9 @@ func Restore(args []string) int {
 			fmt.Fprintf(os.Stderr, "  ✗ %s: %v\n", r.Item.Name, r.Err)
 		} else {
 			ok++
+			if r.Warn {
+				fmt.Fprintf(os.Stderr, "  ⚠ %s: created with partial content\n", r.Item.Name)
+			}
 		}
 	}
 	fmt.Printf("restored %d, %d failed\n", ok, fail)
