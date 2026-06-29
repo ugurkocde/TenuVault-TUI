@@ -88,7 +88,7 @@ func (c *Client) do(ctx context.Context, method, fullURL string, body []byte) ([
 			return nil, 0, err
 		}
 		data, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if resp.StatusCode == http.StatusTooManyRequests && attempt < 5 {
 			wait := 5 * time.Second

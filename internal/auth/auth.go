@@ -1,7 +1,8 @@
 // Package auth builds a Microsoft Graph token credential from the configured
 // flow. It reimplements the flows of the MgGraphCommunity PowerShell module
-// natively in Go (interactive PKCE, device code, client secret, certificate)
-// using the Azure SDK, so the TUI ships as a single self-contained binary.
+// natively in Go (interactive PKCE, client secret, certificate) using the Azure
+// SDK, so the TUI ships as a single self-contained binary. Device code is
+// intentionally not supported (to avoid device-code phishing).
 package auth
 
 import (
@@ -18,8 +19,8 @@ import (
 // granted permissions are admin-consented on the app registration itself.
 var AppScope = []string{"https://graph.microsoft.com/.default"}
 
-// DelegatedScopes are requested explicitly for interactive / device-code sign-in
-// so Microsoft Entra prompts the signed-in admin to consent to the full set the
+// DelegatedScopes are requested explicitly for interactive sign-in so Microsoft
+// Entra prompts the signed-in admin to consent to the full set the
 // tool needs in that tenant — backup (read), and restore/sync (create). Each is
 // ReadWrite (which includes Read). Verified against Microsoft Graph docs.
 var DelegatedScopes = []string{

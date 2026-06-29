@@ -48,6 +48,53 @@ func TestRunSyncLive(t *testing.T) {
 	}
 }
 
+// TestRunSyncWarnsOnPartialContent: a live source type that needs a per-item
+// detail fetch (configurationPolicies / DetailByID) but whose detail GET fails
+// is still created, with Warn set so the incomplete copy is surfaced.
+func TestRunSyncWarnsOnPartialContent(t *testing.T) {
+	source := &graphtest.Fake{} // no GET stub registered -> detail fetch fails
+	target := &graphtest.Fake{}
+	items := []Item{{
+		Category: "ConfigurationPolicies",
+		TypeKey:  "configurationPolicies",
+		Name:     "Catalog",
+		Raw:      []byte(`{"id":"src-1","name":"Catalog"}`),
+	}}
+
+	results := Run(context.Background(), target, source, items, "", nil)
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0].Err != nil {
+		t.Fatalf("item should still be created, got error: %v", results[0].Err)
+	}
+	if !results[0].Warn {
+		t.Error("expected Warn=true when source content could not be fully resolved")
+	}
+	if len(target.Posts) != 1 {
+		t.Fatalf("the policy should still be created, got %d POSTs", len(target.Posts))
+	}
+}
+
+// TestRunSyncNoWarnOnBackupSource: backup-sourced items never set Warn (nothing
+// to enrich; the file is the full content).
+func TestRunSyncNoWarnOnBackupSource(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/p.json"
+	if err := os.WriteFile(path, []byte(`{"@odata.type":"#microsoft.graph.windows10CompliancePolicy","id":"b1","displayName":"Compliance"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := &graphtest.Fake{}
+	results := Run(context.Background(), target, nil,
+		[]Item{{Category: "CompliancePolicies", Name: "Compliance", Path: path}}, "", nil)
+	if len(results) != 1 || results[0].Err != nil {
+		t.Fatalf("results = %+v", results)
+	}
+	if results[0].Warn {
+		t.Error("backup-sourced item should not set Warn")
+	}
+}
+
 // TestRunSyncFromBackup copies a policy read from a backup file (no source).
 func TestRunSyncFromBackup(t *testing.T) {
 	dir := t.TempDir()

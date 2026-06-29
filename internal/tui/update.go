@@ -67,6 +67,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case cleanupDoneMsg:
+		// Only surface failures; on success keep the existing status (e.g. the
+		// "Backup complete" message set just before cleanup ran).
+		if msg.err != nil {
+			m.status, m.statusKind = "Retention cleanup failed: "+msg.err.Error(), "warn"
+		}
+		return m, nil
+
 	case backupEventMsg:
 		m.applyBackupEvent(msg)
 		return m, listen(m.ctx, m.ch)
@@ -642,7 +650,7 @@ func scanCategories(b store.Backup) []catCount {
 }
 
 // buildRestoreItems flattens restorable policies in a backup into restore items,
-// skipping backup-only categories (apps, admin templates, intents, enrollment).
+// skipping any category whose type has no create/restore route.
 func buildRestoreItems(b store.Backup) []restoreSel {
 	cats, _ := b.Categories()
 	var out []restoreSel

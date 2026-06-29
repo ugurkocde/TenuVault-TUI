@@ -141,7 +141,7 @@ func CategoryRestoreSupported(category string) bool {
 }
 
 // DefaultSelection returns the keys selected by default in the backup picker
-// (verified and restore-friendly types, excluding the RBAC-gated scope tags).
+// (every verified type is selected).
 func DefaultSelection() map[string]bool {
 	sel := map[string]bool{}
 	for _, p := range All() {

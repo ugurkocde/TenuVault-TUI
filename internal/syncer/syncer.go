@@ -29,6 +29,10 @@ type Result struct {
 	Item  Item
 	NewID string
 	Err   error
+	// Warn is set when the item was created but its content could not be fully
+	// resolved from the source (e.g. a sub-resource fetch failed), so the copy
+	// may be incomplete.
+	Warn bool
 }
 
 // Event reports sync progress.
@@ -54,26 +58,30 @@ func Run(ctx context.Context, target, source graph.API, items []Item, namePrefix
 		}
 		res := Result{Item: it}
 
-		raw, err := resolve(ctx, source, it)
+		raw, warn, err := resolve(ctx, source, it)
 		if err != nil {
 			res.Err = err
 			results = append(results, res)
 			continue
 		}
+		res.Warn = warn
 		res.NewID, res.Err = policyops.Create(ctx, target, it.Category, raw, namePrefix)
 		results = append(results, res)
 	}
 	return results
 }
 
-// resolve returns the full policy JSON for an item from its source.
-func resolve(ctx context.Context, source graph.API, it Item) (json.RawMessage, error) {
+// resolve returns the full policy JSON for an item from its source. The bool is
+// true when the source content could not be fully enriched (the copy may be
+// incomplete) so callers can surface a warning while still creating the policy.
+func resolve(ctx context.Context, source graph.API, it Item) (json.RawMessage, bool, error) {
 	if it.Path != "" {
-		return store.Read(it.Path)
+		raw, err := store.Read(it.Path)
+		return raw, false, err
 	}
 	if pt, ok := catalog.ByKey(it.TypeKey); ok && source != nil {
-		full, _ := policyops.FetchFull(ctx, source, pt, it.Raw, false)
-		return full, nil
+		full, warn := policyops.FetchFull(ctx, source, pt, it.Raw, false)
+		return full, warn, nil
 	}
-	return it.Raw, nil
+	return it.Raw, false, nil
 }

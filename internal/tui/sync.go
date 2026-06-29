@@ -623,7 +623,7 @@ func (m model) viewSyncResults(w int) string {
 		target = m.conns[m.syncTargetConn].DisplayLabel()
 	}
 	b.WriteString(m.th.crumb.Render("Sync › results") + "  " + m.th.dim.Render(target) + "\n\n")
-	ok, fail := 0, 0
+	ok, fail, warned := 0, 0, 0
 	for _, r := range m.syncResults {
 		if r.Err != nil {
 			fail++
@@ -631,12 +631,20 @@ func (m model) viewSyncResults(w int) string {
 				m.th.dim.Render(trunc(r.Err.Error(), 50)) + "\n")
 		} else {
 			ok++
-			b.WriteString("  " + m.th.success.Render("✔") + " " + m.th.normal.Render(m.syncNamePrefix+r.Item.Name) +
-				m.th.cardLabel.Render("  → "+trunc(r.NewID, 12)) + "\n")
+			line := "  " + m.th.success.Render("✔") + " " + m.th.normal.Render(m.syncNamePrefix+r.Item.Name) +
+				m.th.cardLabel.Render("  → "+trunc(r.NewID, 12))
+			if r.Warn {
+				warned++
+				line += " " + m.th.warn.Render("⚠ partial content")
+			}
+			b.WriteString(line + "\n")
 		}
 	}
-	b.WriteString("\n" + m.th.accent.Render(fmt.Sprintf("%d created, %d failed", ok, fail)) +
-		m.th.dim.Render(" · nothing existing was modified"))
+	summary := m.th.accent.Render(fmt.Sprintf("%d created, %d failed", ok, fail))
+	if warned > 0 {
+		summary += m.th.warn.Render(fmt.Sprintf(" · %d with partial content", warned))
+	}
+	b.WriteString("\n" + summary + m.th.dim.Render(" · nothing existing was modified"))
 	return b.String()
 }
 
