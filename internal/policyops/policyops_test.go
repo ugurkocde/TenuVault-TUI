@@ -1,6 +1,7 @@
 package policyops
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -126,7 +127,7 @@ func TestBuildDefinitionValue(t *testing.T) {
 
 func TestCreateIntentRequiresTemplate(t *testing.T) {
 	raw := []byte(`{"id":"1","displayName":"x","settings":[]}`)
-	if _, err := createIntent(nil, nil, catalog.PolicyType{Version: "beta"}, raw, ""); err == nil {
+	if _, err := createIntent(context.TODO(), nil, catalog.PolicyType{Version: "beta"}, raw, ""); err == nil {
 		t.Error("expected error when templateId is missing")
 	}
 }

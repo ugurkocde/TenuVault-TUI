@@ -1,0 +1,12 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - misspell
+    - unconvert
+
+formatters:
+  enable:
+    - gofmt
