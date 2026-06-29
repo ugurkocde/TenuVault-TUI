@@ -26,9 +26,11 @@ jobs:
         run: go vet ./...
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
+          # Pin to a v2 release built with Go >= the go.mod target (1.26.x);
+          # otherwise golangci-lint refuses to load the config.
+          version: v2.12.2
 
       - name: Test (race)
         run: go test -race ./...
