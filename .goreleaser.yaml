@@ -19,6 +19,10 @@ builds:
     goarch:
       - amd64
       - arm64
+    # macOS ships Apple Silicon only; Intel Macs can still `go install`.
+    ignore:
+      - goos: darwin
+        goarch: amd64
     ldflags:
       - -s -w -X main.version={{ .Version }}
 

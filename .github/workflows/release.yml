@@ -93,13 +93,16 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          for arch in arm64 amd64; do
-            dest="$RUNNER_TEMP/bin-$arch"; mkdir -p "$dest"
-            tar -xzf "dist/tenuvault_${VERSION}_darwin_${arch}.tar.gz" -C "$dest" tenuvault
-            APP_IDENTITY="Developer ID Application: Ugur Koc (D259ULY2B4)" \
-            INSTALLER_IDENTITY="Developer ID Installer: Ugur Koc (D259ULY2B4)" \
-            NOTARY_PROFILE="$MACOS_NOTARY_PROFILE_NAME" \
-            KEYCHAIN="$KEYCHAIN_PATH" OUTDIR=dist-macos \
-            bash scripts/macos-package.sh "$VERSION" "$arch" "$dest/tenuvault"
-          done
-          gh release upload "$GITHUB_REF_NAME" dist-macos/*.dmg dist-macos/*.pkg --clobber
+          # macOS installers ship Apple Silicon only.
+          arch=arm64
+          dest="$RUNNER_TEMP/bin-$arch"; mkdir -p "$dest"
+          tar -xzf "dist/tenuvault_${VERSION}_darwin_${arch}.tar.gz" -C "$dest" tenuvault
+          APP_IDENTITY="Developer ID Application: Ugur Koc (D259ULY2B4)" \
+          INSTALLER_IDENTITY="Developer ID Installer: Ugur Koc (D259ULY2B4)" \
+          NOTARY_PROFILE="$MACOS_NOTARY_PROFILE_NAME" \
+          KEYCHAIN="$KEYCHAIN_PATH" OUTDIR=dist-macos \
+          bash scripts/macos-package.sh "$VERSION" "$arch" "$dest/tenuvault"
+          # Cover the DMG/PKG in checksums.txt (GoReleaser wrote it before this
+          # step ran), then re-upload the updated file alongside them.
+          (cd dist-macos && shasum -a 256 ./*.dmg ./*.pkg | sed 's|\./||') >> dist/checksums.txt
+          gh release upload "$GITHUB_REF_NAME" dist-macos/*.dmg dist-macos/*.pkg dist/checksums.txt --clobber
