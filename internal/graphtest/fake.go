@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/graph"
 )
@@ -23,6 +24,8 @@ type PostCall struct {
 }
 
 // Fake is an in-memory graph.API. Lists and Gets are keyed by "version path".
+// It is safe for concurrent use once the stub maps are populated; configure
+// Lists, Gets, and PostFunc before handing it to code under test.
 type Fake struct {
 	Lists map[string][]json.RawMessage
 	Gets  map[string]json.RawMessage
@@ -32,7 +35,8 @@ type Fake struct {
 	// object with a generated id.
 	PostFunc func(version, path string, body json.RawMessage) (json.RawMessage, error)
 
-	n int
+	mu sync.Mutex
+	n  int
 }
 
 func key(version, path string) string { return version + " " + path }
@@ -52,12 +56,17 @@ func (f *Fake) ListAll(_ context.Context, version, path string, _ url.Values) ([
 
 // Post records the call and returns a generated id (or PostFunc's response).
 func (f *Fake) Post(_ context.Context, version, path string, body json.RawMessage) (json.RawMessage, error) {
+	f.mu.Lock()
 	f.Posts = append(f.Posts, PostCall{Version: version, Path: path, Body: body})
+	f.mu.Unlock()
 	if f.PostFunc != nil {
 		return f.PostFunc(version, path, body)
 	}
+	f.mu.Lock()
 	f.n++
-	return json.RawMessage(fmt.Sprintf(`{"id":"new-%d"}`, f.n)), nil
+	n := f.n
+	f.mu.Unlock()
+	return json.RawMessage(fmt.Sprintf(`{"id":"new-%d"}`, n)), nil
 }
 
 // Patch records the call as a POST-like entry and returns a generated id.
@@ -67,6 +76,8 @@ func (f *Fake) Patch(ctx context.Context, version, path string, body json.RawMes
 
 // PostsTo returns the bodies of POSTs made to a path (substring match).
 func (f *Fake) PostsTo(pathContains string) []json.RawMessage {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	var out []json.RawMessage
 	for _, p := range f.Posts {
 		if strings.Contains(p.Path, pathContains) {

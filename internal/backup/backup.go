@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -25,6 +26,11 @@ import (
 
 // RunbookVersion is recorded in the manifest for portal cross-compatibility.
 const RunbookVersion = "tui-1.0.0"
+
+// backupWorkers bounds per-item detail fetches within a category. The graph
+// client already retries 429/503/504 with Retry-After, so this level of
+// concurrency stays within Graph throttling limits.
+const backupWorkers = 4
 
 // Options configures a backup run.
 type Options struct {
@@ -65,7 +71,9 @@ type Result struct {
 
 // Run backs up the selected policy types into the configured root, emitting
 // progress events. It never aborts the whole run on a single category failure;
-// each category's outcome is captured in the result and the on-disk log. If ctx
+// each category's outcome is captured in the result and the on-disk log.
+// Item detail is fetched concurrently within each category; progress calls are
+// serialized (never concurrent) and Current is monotonic per category. If ctx
 // is cancelled mid-run, everything written so far is kept and the manifest is
 // finalized with Status "Cancelled".
 func Run(ctx context.Context, c graph.API, types []catalog.PolicyType, opts Options, progress func(Event)) (Result, error) {
@@ -120,33 +128,71 @@ loop:
 			emit(Event{Category: pt.Category, Friendly: pt.Friendly, Err: err, Failed: true, Done: true})
 			continue
 		}
+		// Fetch item detail with a bounded worker pool; mu serializes result
+		// accounting, progress emits (Current stays monotonic), and the
+		// writePolicy name-allocation+write step (uniquePath stats the
+		// filesystem, so it must not race with a concurrent write).
 		total := len(items)
-		for i, item := range items {
-			if ctx.Err() != nil {
-				// Keep everything already written: a partial, honestly-labelled
-				// backup beats an orphaned folder with no manifest.
-				cancelled = true
-				break loop
-			}
-			full, warn := policyops.FetchFull(ctx, c, pt, item, opts.IncludeAssignments)
-			if warn {
-				cr.Warnings++
-				emit(Event{Category: pt.Category, Friendly: pt.Friendly, Err: fmt.Errorf("incomplete detail"), Current: i + 1, Total: total})
-			}
-			name := jsonutil.DisplayName(full, pt.NameField)
-			if err := writePolicy(catDir, name, full); err != nil {
-				// A failed disk write is data loss for this policy; record the
-				// cause so the log can distinguish it from partial Graph detail.
-				cr.Warnings++
-				if cr.Error == "" {
-					cr.Error = condense(fmt.Sprintf("write %q: %s", name, err))
+		var mu sync.Mutex
+		done := 0
+		jobs := make(chan json.RawMessage)
+		var wg sync.WaitGroup
+		workers := backupWorkers
+		if total < workers {
+			workers = total
+		}
+		for w := 0; w < workers; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for item := range jobs {
+					if ctx.Err() != nil {
+						continue
+					}
+					full, warn := policyops.FetchFull(ctx, c, pt, item, opts.IncludeAssignments)
+					if ctx.Err() != nil {
+						continue
+					}
+					name := jsonutil.DisplayName(full, pt.NameField)
+					mu.Lock()
+					done++
+					if warn {
+						cr.Warnings++
+						emit(Event{Category: pt.Category, Friendly: pt.Friendly, Err: fmt.Errorf("incomplete detail"), Current: done, Total: total})
+					}
+					if err := writePolicy(catDir, name, full); err != nil {
+						// A failed disk write is data loss for this policy; record the
+						// cause so the log can distinguish it from partial Graph detail.
+						cr.Warnings++
+						if cr.Error == "" {
+							cr.Error = condense(fmt.Sprintf("write %q: %s", name, err))
+						}
+						emit(Event{Category: pt.Category, Friendly: pt.Friendly, Err: err, Current: done, Total: total})
+						mu.Unlock()
+						continue
+					}
+					counts[pt.Category]++
+					cr.Count++
+					emit(Event{Category: pt.Category, Friendly: pt.Friendly, Current: done, Total: total})
+					mu.Unlock()
 				}
-				emit(Event{Category: pt.Category, Friendly: pt.Friendly, Err: err, Current: i + 1, Total: total})
-				continue
+			}()
+		}
+	feed:
+		for _, item := range items {
+			select {
+			case jobs <- item:
+			case <-ctx.Done():
+				break feed
 			}
-			counts[pt.Category]++
-			cr.Count++
-			emit(Event{Category: pt.Category, Friendly: pt.Friendly, Current: i + 1, Total: total})
+		}
+		close(jobs)
+		wg.Wait()
+		if ctx.Err() != nil {
+			// Keep everything already written: a partial, honestly-labelled
+			// backup beats an orphaned folder with no manifest.
+			cancelled = true
+			break loop
 		}
 		emit(Event{Category: pt.Category, Friendly: pt.Friendly, Current: total, Total: total, Done: true})
 	}
