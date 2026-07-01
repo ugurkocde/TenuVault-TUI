@@ -122,9 +122,10 @@ Flags:
 | `-version`     | Print version and exit                        |
 
 Keys: `b` back up, `l` browse, `d` compare, `r` restore, `y` sync, `t` tenants,
-`s` settings, arrow keys / `j` `k` to move, `space` to toggle, `enter` to
-select, `esc` to go back, `q` to quit, `?` for help. The mouse works too — click
-a list row to select it and scroll with the wheel.
+`s` settings, arrow keys / `j` `k` to move, `space` to toggle, `/` to filter
+long lists, `enter` to select, `esc` to go back, `q` to quit, `?` for help.
+While a backup is running, `x` cancels it and keeps what was already written.
+The mouse works too — click a list row to select it and scroll with the wheel.
 
 ## Coverage
 
