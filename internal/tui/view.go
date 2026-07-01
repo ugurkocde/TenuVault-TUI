@@ -112,6 +112,13 @@ func (m model) header(w int) string {
 		if c := m.sourceConn(); c != nil {
 			label = c.DisplayLabel()
 		}
+		// Tenant names are admin-controlled and unbounded; keep the header row
+		// from overflowing narrow terminals.
+		maxLabel := w / 3
+		if maxLabel < 12 {
+			maxLabel = 12
+		}
+		label = trunc(label, maxLabel)
 		suffix := ""
 		if len(m.conns) > 1 {
 			suffix = m.th.crumb.Render(fmt.Sprintf("  +%d", len(m.conns)-1))
@@ -282,7 +289,7 @@ func (m model) viewProgress(w int) (string, string) {
 		}
 		b.WriteString("  " + m.th.inProg.Render(emptyDash(m.progActive)) + "\n")
 		b.WriteString("  " + progBar(frac, min(40, w-20)) + fmt.Sprintf("  %d/%d", m.progCur, m.progTot) + "\n")
-		return b.String(), "ctrl+c cancel"
+		return b.String(), "x / esc cancel backup · ctrl+c quit"
 	}
 	if m.progErr != nil {
 		b.WriteString("  " + m.th.danger.Render("Backup failed: "+m.progErr.Error()) + "\n")
@@ -293,6 +300,8 @@ func (m model) viewProgress(w int) (string, string) {
 		b.WriteString("  " + m.th.danger.Render("✗ Backup failed · "+m.progResult) + "\n")
 	case "CompletedWithWarnings":
 		b.WriteString("  " + m.th.warn.Render("⚠ Completed with warnings · "+m.progResult) + "\n")
+	case "Cancelled":
+		b.WriteString("  " + m.th.warn.Render("⚠ Backup cancelled · kept "+m.progResult) + "\n")
 	default:
 		b.WriteString("  " + m.th.success.Render("✔ Backup complete · "+m.progResult) + "\n")
 	}
@@ -528,7 +537,8 @@ func (m model) viewRestoreConfirm(w int) string {
 	}
 	b.WriteString("\n")
 	if m.restoreRunning {
-		b.WriteString(m.th.inProg.Render(spinnerFrames[m.frame%len(spinnerFrames)]+" Restoring…") + "\n")
+		b.WriteString(m.th.inProg.Render(spinnerFrames[m.frame%len(spinnerFrames)]+" Restoring…") + "  " +
+			m.th.cardLabel.Render("x cancel") + "\n")
 	} else {
 		b.WriteString(lipgloss.NewStyle().Foreground(colGreen).Render("[ y ] confirm restore") + "   " +
 			m.th.dim.Render("[ n ] cancel") + "\n")
@@ -659,8 +669,9 @@ func emptyDash(s string) string {
 }
 
 func trunc(s string, n int) string {
-	if len(s) <= n {
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	return s[:n] + "…"
+	return string(r[:n]) + "…"
 }

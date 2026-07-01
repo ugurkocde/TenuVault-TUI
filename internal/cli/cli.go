@@ -15,6 +15,7 @@ import (
 	"github.com/ugurkocde/TenuVault-TUI/internal/backup"
 	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
 	"github.com/ugurkocde/TenuVault-TUI/internal/config"
+	"github.com/ugurkocde/TenuVault-TUI/internal/diff"
 	"github.com/ugurkocde/TenuVault-TUI/internal/graph"
 	"github.com/ugurkocde/TenuVault-TUI/internal/store"
 	"github.com/ugurkocde/TenuVault-TUI/internal/syncer"
@@ -125,6 +126,42 @@ func Restore(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// Compare diffs two backup folders and prints the drift, one change per line.
+// Exit codes: 0 no drift, 1 drift found, 2 usage/read error. Designed for CI
+// drift gates: `tenuvault compare <older> <newer> && echo "no drift"`.
+func Compare(args []string) int {
+	fs := flag.NewFlagSet("compare", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 2 {
+		fmt.Fprintln(os.Stderr, "usage: tenuvault compare <older-backup-dir> <newer-backup-dir>")
+		return 2
+	}
+	older := store.Backup{Path: fs.Arg(0), Folder: fs.Arg(0)}
+	newer := store.Backup{Path: fs.Arg(1), Folder: fs.Arg(1)}
+	for _, b := range []store.Backup{older, newer} {
+		if _, err := b.Categories(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: cannot read backup %s: %v\n", b.Path, err)
+			return 2
+		}
+	}
+	changes, err := diff.Compare(older, newer)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 2
+	}
+	if len(changes) == 0 {
+		fmt.Println("no drift")
+		return 0
+	}
+	for _, c := range changes {
+		fmt.Printf("%-8s %-8s %s / %s\n", c.Severity, c.Type, c.Category, c.Name)
+	}
+	fmt.Printf("%d changes\n", len(changes))
+	return 1
 }
 
 // selectedTypes resolves a comma-separated key list, defaulting to verified.

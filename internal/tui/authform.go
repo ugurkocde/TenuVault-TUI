@@ -106,8 +106,7 @@ func (m model) submitAuthForm() (tea.Model, tea.Cmd) {
 		}
 		m.cfg.ClientSecret = secret
 	}
-	m.goTo(screenConnecting)
-	return m, tea.Batch(connect(m.ctx, m.cfg, m.ch), listen(m.ctx, m.ch))
+	return m, m.beginConnect(m.cfg)
 }
 
 func (m model) viewAuthForm(w int) string {

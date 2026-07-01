@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -25,6 +27,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tick()
 
 	case connectedMsg:
+		if msg.gen != m.connGen {
+			return m, nil // the user abandoned this attempt; drop the result
+		}
 		// Capture the real tenant id (sign-in may have used "organizations"), so
 		// the connection is matched and re-targeted by its actual tenant.
 		cfg := msg.cfg
@@ -54,6 +59,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, loadBackups(m.cfg.BackupRoot)
 
+	case connectErrMsg:
+		if msg.gen != m.connGen {
+			return m, nil
+		}
+		m.err = msg.err
+		m.goTo(screenError)
+		return m, nil
+
 	case errMsg:
 		m.err = msg.err
 		m.goTo(screenError)
@@ -81,6 +94,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case backupDoneMsg:
 		m.progDone = true
+		m.releaseRun()
 		if msg.err != nil {
 			m.progErr = msg.err
 		} else {
@@ -96,6 +110,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status, m.statusKind = "Backup failed", "err"
 			case "CompletedWithWarnings":
 				m.status, m.statusKind = "Backup completed with warnings", "warn"
+			case "Cancelled":
+				m.status, m.statusKind = "Backup cancelled · "+m.progResult, "warn"
 			default:
 				m.status, m.statusKind = "Backup complete · "+m.progResult, "ok"
 			}
@@ -110,6 +126,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case restoreDoneMsg:
 		m.restoreResults = msg.results
 		m.restoreRunning = false
+		m.releaseRun()
 		fail := 0
 		for _, r := range msg.results {
 			if r.Err != nil {
@@ -142,6 +159,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case syncDoneMsg:
 		m.syncResults = msg.results
 		m.syncRunning = false
+		m.releaseRun()
 		fail := 0
 		for _, r := range msg.results {
 			if r.Err != nil {
@@ -154,6 +172,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg.String())
+
+	case tea.PasteMsg:
+		// Bracketed paste goes into the focused text field (client secrets and
+		// cert paths are long; nobody should have to type them rune by rune).
+		if m.screen == screenAuthForm && len(m.authFormFields) > 0 {
+			m.authFormFields[m.authFormCursor].value += sanitizePaste(msg.Content)
+		}
+		return m, nil
 
 	case tea.MouseWheelMsg, tea.MouseClickMsg:
 		if mm, cmd, ok := m.handleMouse(msg); ok {
@@ -186,7 +212,9 @@ func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 		m.cancel()
 		return m, tea.Quit
 	}
-	if key == "?" {
+	// "?" toggles help everywhere except text-entry screens, where it is a
+	// perfectly valid character (client secrets often contain one).
+	if key == "?" && m.screen != screenAuthForm {
 		m.showHelp = !m.showHelp
 		return m, nil
 	}
@@ -200,6 +228,7 @@ func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 		return m.keyAuthForm(key)
 	case screenConnecting:
 		if key == "esc" {
+			m.connGen++ // orphan the in-flight attempt so its result is dropped
 			m.goTo(screenAuth)
 		}
 		return m, nil
@@ -210,6 +239,9 @@ func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 	case screenProgress:
 		if m.progDone && (key == "enter" || key == "esc") {
 			m.goTo(screenDashboard)
+		}
+		if !m.progDone && (key == "x" || key == "esc") && m.runCancel != nil {
+			m.runCancel() // backup.Run notices, keeps what it wrote, reports Cancelled
 		}
 		return m, nil
 	case screenBrowse:
@@ -265,6 +297,14 @@ func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// beginConnect starts a connect attempt under a fresh generation, so results
+// from any older, abandoned attempt are ignored when they eventually arrive.
+func (m *model) beginConnect(cfg config.Config) tea.Cmd {
+	m.connGen++
+	m.goTo(screenConnecting)
+	return tea.Batch(connect(m.ctx, cfg, m.ch, m.connGen), listen(m.ctx, m.ch))
+}
+
 func (m model) keyAuth(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "up", "k":
@@ -281,8 +321,7 @@ func (m model) keyAuth(key string) (tea.Model, tea.Cmd) {
 		method := m.authOptions[m.authCursor].method
 		if method == config.AuthInteractive {
 			m.cfg.AuthMethod = method
-			m.goTo(screenConnecting)
-			return m, tea.Batch(connect(m.ctx, m.cfg, m.ch), listen(m.ctx, m.ch))
+			return m, m.beginConnect(m.cfg)
 		}
 		return m.startAuthForm(method)
 	}
@@ -401,7 +440,8 @@ func (m model) keyBackupSelect(key string) (tea.Model, tea.Cmd) {
 		m.progStatus, m.progCats = "", nil
 		m.goTo(screenProgress)
 		opts := backup.Options{Root: m.cfg.BackupRoot, Tenant: m.sourceTenant(), IncludeAssignments: m.cfg.IncludeAssignments}
-		return m, tea.Batch(runBackup(m.ctx, m.sourceClient(), types, opts, m.ch), listen(m.ctx, m.ch))
+		runCtx := m.newRun()
+		return m, tea.Batch(runBackup(runCtx, m.ctx, m.sourceClient(), types, opts, m.ch), listen(m.ctx, m.ch))
 	}
 	return m, nil
 }
@@ -476,6 +516,9 @@ func (m model) keyBrowseDetail(key string) (tea.Model, tea.Cmd) {
 			m.restoreBackup = &b
 			m.restoreItems = buildRestoreItems(b)
 			m.restoreCursor, m.restoreScroll = 0, 0
+			// A restore started here must never inherit sync routing from an
+			// earlier, abandoned sync flow.
+			m.syncMode = false
 			m.goTo(screenRestorePick)
 		}
 	}
@@ -543,7 +586,7 @@ func (m model) keySettings(key string) (tea.Model, tea.Cmd) {
 		_ = config.Save(m.cfg)
 		m.status, m.statusKind = "Settings saved", "ok"
 	case "+", "=", "right", "l":
-		if m.settingsCursor == 1 {
+		if m.settingsCursor == 1 && m.cfg.RetentionDays < 3650 {
 			m.cfg.RetentionDays++
 			_ = config.Save(m.cfg)
 		}
@@ -622,6 +665,12 @@ func (m model) keyRestorePick(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) keyRestoreConfirm(key string) (tea.Model, tea.Cmd) {
+	if m.restoreRunning {
+		if key == "x" && m.runCancel != nil {
+			m.runCancel()
+		}
+		return m, nil
+	}
 	switch key {
 	case "y":
 		items := m.selectedRestoreItems()
@@ -631,11 +680,39 @@ func (m model) keyRestoreConfirm(key string) (tea.Model, tea.Cmd) {
 		}
 		m.restoreRunning = true
 		m.restoreResults = nil
-		return m, tea.Batch(runRestore(m.ctx, m.sourceClient(), items, m.ch), listen(m.ctx, m.ch))
+		runCtx := m.newRun()
+		return m, tea.Batch(runRestore(runCtx, m.ctx, m.sourceClient(), items, m.ch), listen(m.ctx, m.ch))
 	case "n", "esc":
 		m.goTo(screenRestorePick)
 	}
 	return m, nil
+}
+
+// newRun derives a cancellable context for one long operation and stores its
+// cancel func so the user can abort just that run.
+func (m *model) newRun() context.Context {
+	runCtx, cancel := context.WithCancel(m.ctx)
+	m.runCancel = cancel
+	return runCtx
+}
+
+// releaseRun frees the finished run's context resources.
+func (m *model) releaseRun() {
+	if m.runCancel != nil {
+		m.runCancel()
+		m.runCancel = nil
+	}
+}
+
+// sanitizePaste strips control characters (newlines, tabs, ANSI fragments)
+// from pasted text so a multi-line paste can't corrupt a single-line field.
+func sanitizePaste(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // scanCategories counts policy files per category in a backup.

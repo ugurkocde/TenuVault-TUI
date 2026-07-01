@@ -123,6 +123,11 @@ type model struct {
 	connected  bool
 	addingConn bool
 	connCursor int
+	connGen    int // generation guard for stale connect results after esc
+
+	// runCancel aborts the in-flight backup/restore/sync operation without
+	// tearing down the whole app context. Nil when nothing is running.
+	runCancel context.CancelFunc
 
 	// auth screen
 	authOptions    []authOption
@@ -214,6 +219,7 @@ type syncType struct {
 	loaded     bool
 	loading    bool
 	pendingAll bool
+	err        string // last load failure; retried on the next open/toggle
 	policies   []syncPol
 }
 

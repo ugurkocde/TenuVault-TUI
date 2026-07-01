@@ -23,6 +23,8 @@ func main() {
 			os.Exit(cli.Backup(os.Args[2:]))
 		case "restore":
 			os.Exit(cli.Restore(os.Args[2:]))
+		case "compare":
+			os.Exit(cli.Compare(os.Args[2:]))
 		}
 	}
 

@@ -56,3 +56,39 @@ func TestRunWritesBackup(t *testing.T) {
 		t.Errorf("metadata = %+v", meta)
 	}
 }
+
+// TestRunCancelledKeepsPartialBackup cancels the run up front: nothing is
+// fetched, but the folder still gets a manifest with Status "Cancelled" so it
+// is never left as an orphan without metadata.
+func TestRunCancelledKeepsPartialBackup(t *testing.T) {
+	dc, _ := catalog.ByKey("deviceConfigurations")
+	f := &graphtest.Fake{Lists: map[string][]json.RawMessage{
+		"beta " + dc.ListPath: {
+			[]byte(`{"id":"1","displayName":"BitLocker"}`),
+		},
+	}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	root := t.TempDir()
+	res, err := Run(ctx, f, []catalog.PolicyType{dc},
+		Options{Root: root, Tenant: graph.Tenant{ID: "t1"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "Cancelled" {
+		t.Errorf("status = %q, want Cancelled", res.Status)
+	}
+	data, err := os.ReadFile(filepath.Join(res.Path, "metadata.json"))
+	if err != nil {
+		t.Fatalf("metadata.json missing after cancel: %v", err)
+	}
+	var meta store.Metadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta.Status != "Cancelled" {
+		t.Errorf("manifest status = %q, want Cancelled", meta.Status)
+	}
+}

@@ -16,10 +16,11 @@ type Tenant struct {
 }
 
 // Organization fetches the signed-in tenant. It doubles as a token/permission
-// smoke test after authentication.
+// smoke test after authentication, so it uses v1.0: this is the first Graph
+// call after sign-in, and beta endpoints carry no stability guarantees.
 func (c *Client) Organization(ctx context.Context) (Tenant, error) {
 	q := url.Values{"$select": {"id,displayName,verifiedDomains"}}
-	data, err := c.Get(ctx, "beta", "/organization", q)
+	data, err := c.Get(ctx, "v1.0", "/organization", q)
 	if err != nil {
 		return Tenant{}, err
 	}

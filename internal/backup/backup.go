@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
 	"github.com/ugurkocde/TenuVault-TUI/internal/graph"
@@ -64,7 +65,9 @@ type Result struct {
 
 // Run backs up the selected policy types into the configured root, emitting
 // progress events. It never aborts the whole run on a single category failure;
-// each category's outcome is captured in the result and the on-disk log.
+// each category's outcome is captured in the result and the on-disk log. If ctx
+// is cancelled mid-run, everything written so far is kept and the manifest is
+// finalized with Status "Cancelled".
 func Run(ctx context.Context, c graph.API, types []catalog.PolicyType, opts Options, progress func(Event)) (Result, error) {
 	start := time.Now()
 	folder := "backup-" + start.Format("2006-01-02-150405")
@@ -91,12 +94,19 @@ func Run(ctx context.Context, c graph.API, types []catalog.PolicyType, opts Opti
 		return r
 	}
 
+	cancelled := false
+loop:
 	for _, pt := range types {
+		if ctx.Err() != nil {
+			cancelled = true
+			break
+		}
 		cr := result(pt)
 		items, err := c.ListAll(ctx, pt.Version, pt.ListPath, nil)
 		if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return Result{}, ctxErr
+			if ctx.Err() != nil {
+				cancelled = true
+				break
 			}
 			cr.Failed = true
 			cr.Error = condense(err.Error())
@@ -112,8 +122,11 @@ func Run(ctx context.Context, c graph.API, types []catalog.PolicyType, opts Opti
 		}
 		total := len(items)
 		for i, item := range items {
-			if err := ctx.Err(); err != nil {
-				return Result{}, err
+			if ctx.Err() != nil {
+				// Keep everything already written: a partial, honestly-labelled
+				// backup beats an orphaned folder with no manifest.
+				cancelled = true
+				break loop
 			}
 			full, warn := policyops.FetchFull(ctx, c, pt, item, opts.IncludeAssignments)
 			if warn {
@@ -122,7 +135,13 @@ func Run(ctx context.Context, c graph.API, types []catalog.PolicyType, opts Opti
 			}
 			name := jsonutil.DisplayName(full, pt.NameField)
 			if err := writePolicy(catDir, name, full); err != nil {
+				// A failed disk write is data loss for this policy; record the
+				// cause so the log can distinguish it from partial Graph detail.
 				cr.Warnings++
+				if cr.Error == "" {
+					cr.Error = condense(fmt.Sprintf("write %q: %s", name, err))
+				}
+				emit(Event{Category: pt.Category, Friendly: pt.Friendly, Err: err, Current: i + 1, Total: total})
 				continue
 			}
 			counts[pt.Category]++
@@ -147,6 +166,8 @@ func Run(ctx context.Context, c graph.API, types []catalog.PolicyType, opts Opti
 	}
 	status := "Success"
 	switch {
+	case cancelled:
+		status = "Cancelled"
 	case failed > 0 && failed == len(order):
 		status = "Failed"
 	case failed > 0 || warned > 0:
@@ -210,7 +231,11 @@ func writeLog(dir string, m store.Metadata, cats []CategoryResult) {
 		case c.Failed:
 			fmt.Fprintf(&b, "FAILED   %-32s %s\n", c.Category, c.Error)
 		case c.Warnings > 0:
-			fmt.Fprintf(&b, "WARN     %-32s %d saved, %d incomplete\n", c.Category, c.Count, c.Warnings)
+			fmt.Fprintf(&b, "WARN     %-32s %d saved, %d incomplete", c.Category, c.Count, c.Warnings)
+			if c.Error != "" {
+				fmt.Fprintf(&b, " · %s", c.Error)
+			}
+			b.WriteString("\n")
 		default:
 			fmt.Fprintf(&b, "ok       %-32s %d saved\n", c.Category, c.Count)
 		}
@@ -222,7 +247,11 @@ func condense(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\r", " ")
 	if len(s) > 200 {
-		s = s[:200] + "…"
+		cut := 200
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = s[:cut] + "…"
 	}
 	return s
 }

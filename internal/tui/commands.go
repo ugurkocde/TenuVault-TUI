@@ -25,6 +25,11 @@ type (
 		client *graph.Client
 		tenant graph.Tenant
 		cfg    config.Config
+		gen    int // connect generation this result belongs to
+	}
+	connectErrMsg struct {
+		err error
+		gen int
 	}
 	errMsg         struct{ err error }
 	backupEventMsg backup.Event
@@ -63,47 +68,50 @@ func send(ctx context.Context, ch chan tea.Msg, msg tea.Msg) {
 	}
 }
 
-// connect builds the credential and client, then fetches the tenant. Progress
-// and errors are streamed through ch and shown on the connecting screen.
-func connect(ctx context.Context, cfg config.Config, ch chan tea.Msg) tea.Cmd {
+// connect builds the credential and client, then fetches the tenant. Results
+// carry gen so an attempt the user already abandoned (esc) is dropped instead
+// of yanking them to the dashboard or the error screen.
+func connect(ctx context.Context, cfg config.Config, ch chan tea.Msg, gen int) tea.Cmd {
 	return func() tea.Msg {
 		go func() {
 			cred, err := auth.New(cfg)
 			if err != nil {
-				send(ctx, ch, errMsg{err})
+				send(ctx, ch, connectErrMsg{err: err, gen: gen})
 				return
 			}
 			client := graph.New(cred, auth.ScopesFor(cfg.AuthMethod))
 			tenant, err := client.Organization(ctx)
 			if err != nil {
-				send(ctx, ch, errMsg{err})
+				send(ctx, ch, connectErrMsg{err: err, gen: gen})
 				return
 			}
-			send(ctx, ch, connectedMsg{client: client, tenant: tenant, cfg: cfg})
+			send(ctx, ch, connectedMsg{client: client, tenant: tenant, cfg: cfg, gen: gen})
 		}()
 		return nil
 	}
 }
 
 // runBackup streams progress events and a final done message through ch.
-func runBackup(ctx context.Context, c *graph.Client, types []catalog.PolicyType, opts backup.Options, ch chan tea.Msg) tea.Cmd {
+// runCtx cancels only this backup; ui outlives it so the done message (with
+// partial results) still reaches the model after a cancel.
+func runBackup(runCtx, ui context.Context, c *graph.Client, types []catalog.PolicyType, opts backup.Options, ch chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		go func() {
-			res, err := backup.Run(ctx, c, types, opts, func(e backup.Event) {
-				send(ctx, ch, backupEventMsg(e))
+			res, err := backup.Run(runCtx, c, types, opts, func(e backup.Event) {
+				send(ui, ch, backupEventMsg(e))
 			})
-			send(ctx, ch, backupDoneMsg{res: res, err: err})
+			send(ui, ch, backupDoneMsg{res: res, err: err})
 		}()
 		return nil
 	}
 }
 
 // runRestore performs the restore and returns the results.
-func runRestore(ctx context.Context, c *graph.Client, items []restore.Item, ch chan tea.Msg) tea.Cmd {
+func runRestore(runCtx, ui context.Context, c *graph.Client, items []restore.Item, ch chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		go func() {
-			results := restore.Restore(ctx, c, items)
-			send(ctx, ch, restoreDoneMsg{results: results})
+			results := restore.Restore(runCtx, c, items)
+			send(ui, ch, restoreDoneMsg{results: results})
 		}()
 		return nil
 	}
@@ -160,13 +168,13 @@ func loadSyncType(ctx context.Context, c *graph.Client, pt catalog.PolicyType, g
 }
 
 // runSync copies items into the target tenant, streaming progress.
-func runSync(ctx context.Context, target, source *graph.Client, items []syncer.Item, prefix string, ch chan tea.Msg) tea.Cmd {
+func runSync(runCtx, ui context.Context, target, source *graph.Client, items []syncer.Item, prefix string, ch chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		go func() {
-			results := syncer.Run(ctx, target, source, items, prefix, func(e syncer.Event) {
-				send(ctx, ch, syncEventMsg(e))
+			results := syncer.Run(runCtx, target, source, items, prefix, func(e syncer.Event) {
+				send(ui, ch, syncEventMsg(e))
 			})
-			send(ctx, ch, syncDoneMsg{results: results})
+			send(ui, ch, syncDoneMsg{results: results})
 		}()
 		return nil
 	}

@@ -59,8 +59,8 @@ Built with Go and the [Charm](https://charm.land) stack (Bubble Tea, Lip Gloss).
   overwrites existing policies.
 - **Signed and notarized.** macOS builds are Developer ID-signed and Apple-
   notarized; install via Homebrew, `.pkg`, `.dmg`, or a raw binary.
-- **Scriptable.** `backup` and `restore` subcommands run headless for CI and
-  scheduling. Mouse, scrollbars, and keyboard navigation throughout.
+- **Scriptable.** `backup`, `restore`, and `compare` subcommands run headless
+  for CI and scheduling. Mouse, scrollbars, and keyboard navigation throughout.
 
 ## Install
 
@@ -144,8 +144,9 @@ best-effort (default/singleton configs can't be recreated).
 
 ## Headless (automation / CI)
 
-`backup` and `restore` run without the TUI for scheduling and pipelines. Use
-app-registration credentials (interactive sign-in needs a browser):
+`backup`, `restore`, and `compare` run without the TUI for scheduling and
+pipelines. `backup` and `restore` use app-registration credentials (interactive
+sign-in needs a browser); `compare` works entirely offline:
 
 ```sh
 export AZURE_TENANT_ID=...   AZURE_CLIENT_ID=...   AZURE_CLIENT_SECRET=...
@@ -153,11 +154,14 @@ export AZURE_TENANT_ID=...   AZURE_CLIENT_ID=...   AZURE_CLIENT_SECRET=...
 tenuvault backup --out ./backups --assignments
 tenuvault backup --categories deviceConfigurations,compliancePolicies
 tenuvault restore --backup ./backups/backup-2026-06-27-020000 --prefix "[Restored] "
+tenuvault compare ./backups/backup-2026-06-26-020000 ./backups/backup-2026-06-27-020000
 ```
 
 `backup` exits non-zero if a backup fails; `restore` exits non-zero if any policy
-fails to create. Tenant-to-tenant sync remains interactive (it needs two
-tenants).
+fails to create. `compare` prints one change per line and exits `0` when the
+backups match, `1` when drift is found, and `2` on a usage or read error, so a
+nightly job can gate on configuration drift. Tenant-to-tenant sync remains
+interactive (it needs two tenants).
 
 ## Tenant sync
 

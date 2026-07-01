@@ -2,7 +2,9 @@ package jsonutil
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestSanitizeFilename(t *testing.T) {
@@ -15,6 +17,18 @@ func TestSanitizeFilename(t *testing.T) {
 		if got := SanitizeFilename(in); got != want {
 			t.Errorf("SanitizeFilename(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestSanitizeFilenameRuneBoundary(t *testing.T) {
+	// 179 ASCII bytes followed by a 2-byte rune straddling the 180-byte cut.
+	name := strings.Repeat("a", 179) + "äöü"
+	got := SanitizeFilename(name)
+	if !utf8.ValidString(got) {
+		t.Errorf("truncated filename is not valid UTF-8: %q", got)
+	}
+	if len(got) > 180 {
+		t.Errorf("len = %d, want <= 180", len(got))
 	}
 }
 

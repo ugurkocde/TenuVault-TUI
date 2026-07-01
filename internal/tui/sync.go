@@ -92,6 +92,11 @@ func (m model) keyConnections(key string) (tea.Model, tea.Cmd) {
 		m.cfg.Connections = kept
 		if row.liveIdx >= 0 {
 			m.conns = append(m.conns[:row.liveIdx], m.conns[row.liveIdx+1:]...)
+			// Removing an earlier entry shifts everything left; follow the
+			// active source so it keeps pointing at the same tenant.
+			if row.liveIdx < m.sourceIdx {
+				m.sourceIdx--
+			}
 			if m.sourceIdx >= len(m.conns) {
 				m.sourceIdx = len(m.conns) - 1
 			}
@@ -124,12 +129,13 @@ func (m model) keyConnections(key string) (tea.Model, tea.Cmd) {
 			m.cfg = cfg
 			return m.startAuthForm(cfg.AuthMethod)
 		}
-		m.goTo(screenConnecting)
-		return m, tea.Batch(connect(m.ctx, cfg, m.ch), listen(m.ctx, m.ch))
+		return m, m.beginConnect(cfg)
 	case "esc", "q":
 		if m.connected {
 			m.goTo(screenDashboard)
-		} else if key == "q" {
+		} else if key == "esc" {
+			m.goTo(screenAuth) // not connected: back out to a fresh sign-in
+		} else {
 			return m, tea.Quit
 		}
 	}
@@ -262,6 +268,12 @@ func (m model) keySyncPolicies(key string) (tea.Model, tea.Cmd) {
 		for i := range st.policies {
 			st.policies[i].sel = !all
 		}
+	case "r":
+		if st.err != "" && !st.loading {
+			st.loading = true
+			st.err = ""
+			return m, loadSyncType(m.ctx, m.syncSourceClient(), st.pt, m.syncGen)
+		}
 	case "esc", "q":
 		m.goTo(screenSyncSelect)
 	}
@@ -278,6 +290,15 @@ func (m *model) applySyncPolicies(msg syncPoliciesLoadedMsg) {
 		}
 		st := &m.syncTypes[i]
 		st.loading = false
+		if msg.err != nil {
+			// Leave the type unloaded so the next open/toggle retries, and keep
+			// the cause visible instead of pretending the tenant has no policies.
+			st.loaded = false
+			st.pendingAll = false
+			st.err = trunc(msg.err.Error(), 70)
+			return
+		}
+		st.err = ""
 		st.loaded = true
 		st.policies = msg.policies
 		if st.pendingAll {
@@ -368,6 +389,12 @@ func (m model) keySyncNaming(key string) (tea.Model, tea.Cmd) {
 // --- confirm ---
 
 func (m model) keySyncConfirm(key string) (tea.Model, tea.Cmd) {
+	if m.syncRunning {
+		if key == "x" && m.runCancel != nil {
+			m.runCancel()
+		}
+		return m, nil
+	}
 	switch key {
 	case "y":
 		if len(m.syncItems) == 0 || m.syncTargetConn < 0 || m.syncTargetConn >= len(m.conns) {
@@ -381,7 +408,8 @@ func (m model) keySyncConfirm(key string) (tea.Model, tea.Cmd) {
 		m.syncRunning = true
 		m.syncResults = nil
 		m.syncCur, m.syncTot = 0, len(m.syncItems)
-		return m, tea.Batch(runSync(m.ctx, target, source, m.syncItems, m.syncNamePrefix, m.ch), listen(m.ctx, m.ch))
+		runCtx := m.newRun()
+		return m, tea.Batch(runSync(runCtx, m.ctx, target, source, m.syncItems, m.syncNamePrefix, m.ch), listen(m.ctx, m.ch))
 	case "n", "esc":
 		m.goTo(screenSyncNaming)
 	}
@@ -496,6 +524,8 @@ func (m model) viewSyncSelect(w int) string {
 		switch {
 		case st.loading:
 			right = m.th.inProg.Render("loading…")
+		case st.err != "":
+			right = m.th.danger.Render("load failed · retry with enter")
 		case st.loaded && sel > 0:
 			right = m.th.accent.Render(fmt.Sprintf("%d of %d", sel, len(st.policies)))
 		case st.loaded:
@@ -520,6 +550,11 @@ func (m model) viewSyncPolicies(w int) string {
 	b.WriteString(m.th.crumb.Render("Sync › "+st.pt.Friendly) + "\n\n")
 	if st.loading {
 		b.WriteString(m.th.inProg.Render(spinnerFrames[m.frame%len(spinnerFrames)] + " loading policies…"))
+		return b.String()
+	}
+	if st.err != "" {
+		b.WriteString(m.th.danger.Render("Could not load policies: "+st.err) + "\n\n")
+		b.WriteString(m.th.cardLabel.Render("r retry · esc back"))
 		return b.String()
 	}
 	if len(st.policies) == 0 {
@@ -609,7 +644,8 @@ func (m model) viewSyncConfirm(w int) string {
 	b.WriteString("\n" + m.th.warn.Render("⚠ Never overwrites — only creates new policies; existing policies are untouched") + "\n")
 	b.WriteString(m.th.dim.Render("   Conditional access is created disabled · assignments are not copied") + "\n\n")
 	if m.syncRunning {
-		b.WriteString(m.th.inProg.Render(fmt.Sprintf("%s creating… %d/%d", spinnerFrames[m.frame%len(spinnerFrames)], m.syncCur, m.syncTot)))
+		b.WriteString(m.th.inProg.Render(fmt.Sprintf("%s creating… %d/%d", spinnerFrames[m.frame%len(spinnerFrames)], m.syncCur, m.syncTot)) +
+			"  " + m.th.cardLabel.Render("x cancel"))
 	} else {
 		b.WriteString(m.th.success.Render("[ y ] create") + "   " + m.th.dim.Render("[ n ] cancel") + "   " + m.th.inProg.Render("● writes to "+target))
 	}

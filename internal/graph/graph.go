@@ -61,7 +61,9 @@ func (c *Client) token(ctx context.Context) (string, error) {
 }
 
 // do performs a single request against an absolute or relative Graph URL,
-// retrying on HTTP 429 honoring Retry-After.
+// retrying on HTTP 429/503/504 honoring Retry-After. Transport-level errors are
+// retried only for GET: a POST/PATCH may have been applied server-side even
+// when the response never arrived, and retrying could duplicate a policy.
 func (c *Client) do(ctx context.Context, method, fullURL string, body []byte) ([]byte, int, error) {
 	for attempt := 0; ; attempt++ {
 		// Acquire the token each attempt so a long Retry-After wait can't leave
@@ -85,22 +87,32 @@ func (c *Client) do(ctx context.Context, method, fullURL string, body []byte) ([
 		}
 		resp, err := c.http.Do(req)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, 0, ctx.Err()
+			}
+			if method == http.MethodGet && attempt < 3 {
+				if !sleepCtx(ctx, backoff(attempt)) {
+					return nil, 0, ctx.Err()
+				}
+				continue
+			}
 			return nil, 0, err
 		}
 		data, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 
-		if resp.StatusCode == http.StatusTooManyRequests && attempt < 5 {
-			wait := 5 * time.Second
+		if retryableStatus(resp.StatusCode) && attempt < 5 {
+			wait := backoff(attempt)
 			if ra := resp.Header.Get("Retry-After"); ra != "" {
 				if secs, err := strconv.Atoi(ra); err == nil {
 					wait = time.Duration(secs) * time.Second
 				}
 			}
-			select {
-			case <-ctx.Done():
+			if wait > 2*time.Minute {
+				wait = 2 * time.Minute
+			}
+			if !sleepCtx(ctx, wait) {
 				return nil, resp.StatusCode, ctx.Err()
-			case <-time.After(wait):
 			}
 			continue
 		}
@@ -108,6 +120,33 @@ func (c *Client) do(ctx context.Context, method, fullURL string, body []byte) ([
 			return data, resp.StatusCode, fmt.Errorf("graph %s %s: %d: %s", method, fullURL, resp.StatusCode, string(data))
 		}
 		return data, resp.StatusCode, nil
+	}
+}
+
+// retryableStatus reports whether Graph signalled a transient condition worth
+// retrying (throttling or a temporarily unavailable service).
+func retryableStatus(code int) bool {
+	switch code {
+	case http.StatusTooManyRequests, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
+// backoff returns the exponential fallback wait for the given attempt when no
+// Retry-After header is present: 2s, 4s, 8s, 16s, 32s.
+func backoff(attempt int) time.Duration {
+	return time.Duration(2<<attempt) * time.Second
+}
+
+// sleepCtx waits for d or until ctx is cancelled; it reports whether the full
+// wait elapsed.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
 	}
 }
 

@@ -175,3 +175,66 @@ func TestListAllReturnsErrorOnBadJSON(t *testing.T) {
 		t.Fatal("expected a decode error for an invalid collection body")
 	}
 }
+
+func TestDoRetriesOn503(t *testing.T) {
+	var attempts int32
+	c, _ := testClient(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			return resp(http.StatusServiceUnavailable, "", http.Header{"Retry-After": {"0"}}), nil
+		}
+		return resp(http.StatusOK, `{"ok":true}`, nil), nil
+	}))
+
+	data, code, err := c.do(context.Background(), http.MethodGet, baseV1+"/me", nil)
+	if err != nil {
+		t.Fatalf("do after 503 retry: %v", err)
+	}
+	if code != http.StatusOK || string(data) != `{"ok":true}` {
+		t.Errorf("code=%d body=%q", code, data)
+	}
+	if atomic.LoadInt32(&attempts) != 2 {
+		t.Errorf("attempts = %d, want 2", attempts)
+	}
+}
+
+func TestDoRetries429OnPost(t *testing.T) {
+	// A 429 means Graph rejected the request without applying it, so retrying a
+	// POST is safe (unlike a transport error, which is never retried for POST).
+	var attempts int32
+	c, _ := testClient(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			return resp(http.StatusTooManyRequests, "", http.Header{"Retry-After": {"0"}}), nil
+		}
+		return resp(http.StatusCreated, `{"id":"new"}`, nil), nil
+	}))
+
+	data, code, err := c.do(context.Background(), http.MethodPost, baseV1+"/things", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("do after 429 retry: %v", err)
+	}
+	if code != http.StatusCreated || string(data) != `{"id":"new"}` {
+		t.Errorf("code=%d body=%q", code, data)
+	}
+	if atomic.LoadInt32(&attempts) != 2 {
+		t.Errorf("attempts = %d, want 2", attempts)
+	}
+}
+
+func TestDoGivesUpAfterMaxRetries(t *testing.T) {
+	var attempts int32
+	c, _ := testClient(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		atomic.AddInt32(&attempts, 1)
+		return resp(http.StatusServiceUnavailable, "", http.Header{"Retry-After": {"0"}}), nil
+	}))
+
+	_, code, err := c.do(context.Background(), http.MethodGet, baseV1+"/me", nil)
+	if err == nil {
+		t.Fatal("want error after persistent 503")
+	}
+	if code != http.StatusServiceUnavailable {
+		t.Errorf("code = %d, want 503", code)
+	}
+	if n := atomic.LoadInt32(&attempts); n != 6 { // initial attempt + 5 retries
+		t.Errorf("attempts = %d, want 6", n)
+	}
+}

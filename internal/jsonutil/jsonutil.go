@@ -6,6 +6,7 @@ package jsonutil
 import (
 	"encoding/json"
 	"strings"
+	"unicode/utf8"
 )
 
 // SanitizeFilename makes a Graph display name safe to use as a file name.
@@ -22,8 +23,15 @@ func SanitizeFilename(name string) string {
 	}
 	out := strings.Map(repl, name)
 	out = strings.TrimSpace(out)
+	// Truncate on a rune boundary: byte-slicing could split a multi-byte
+	// character (umlauts, CJK) and leave invalid UTF-8 in the filename.
 	if len(out) > 180 {
-		out = out[:180]
+		cut := 180
+		for cut > 0 && !utf8.RuneStart(out[cut]) {
+			cut--
+		}
+		out = out[:cut]
+		out = strings.TrimSpace(out)
 	}
 	if out == "" {
 		return "unnamed"
