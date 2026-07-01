@@ -224,6 +224,7 @@ func (m model) keySyncSelect(key string) (tea.Model, tea.Cmd) {
 		m.syncActiveType = m.syncTypeCursor
 		m.syncPolCursor = 0
 		st := &m.syncTypes[m.syncActiveType]
+		m.resetFilter()
 		m.goTo(screenSyncPolicies)
 		if !st.loaded && !st.loading {
 			st.loading = true
@@ -250,22 +251,31 @@ func (m model) keySyncPolicies(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	st := &m.syncTypes[m.syncActiveType]
+	if m.filterActive && m.filterInputKey(key) {
+		m.syncPolCursor = snapFiltered(m.syncPolCursor, syncPolVisible(st.policies, m.filterQuery))
+		return m, nil
+	}
+	visible := syncPolVisible(st.policies, m.filterQuery)
 	switch key {
+	case "/":
+		m.filterActive = true
 	case "up", "k":
-		if m.syncPolCursor > 0 {
-			m.syncPolCursor--
-		}
+		m.syncPolCursor = stepFiltered(m.syncPolCursor, -1, visible)
 	case "down", "j":
-		if m.syncPolCursor < len(st.policies)-1 {
-			m.syncPolCursor++
-		}
+		m.syncPolCursor = stepFiltered(m.syncPolCursor, 1, visible)
 	case " ", "space":
-		if len(st.policies) > 0 {
+		if idxVisible(visible, m.syncPolCursor) {
 			st.policies[m.syncPolCursor].sel = !st.policies[m.syncPolCursor].sel
 		}
 	case "a":
-		all := allSelected(st.policies)
-		for i := range st.policies {
+		all := true
+		for _, i := range visible {
+			if !st.policies[i].sel {
+				all = false
+				break
+			}
+		}
+		for _, i := range visible {
 			st.policies[i].sel = !all
 		}
 	case "r":
@@ -274,7 +284,13 @@ func (m model) keySyncPolicies(key string) (tea.Model, tea.Cmd) {
 			st.err = ""
 			return m, loadSyncType(m.ctx, m.syncSourceClient(), st.pt, m.syncGen)
 		}
-	case "esc", "q":
+	case "esc":
+		if m.filterQuery != "" {
+			m.filterQuery = ""
+			return m, nil
+		}
+		m.goTo(screenSyncSelect)
+	case "q":
 		m.goTo(screenSyncSelect)
 	}
 	return m, nil
@@ -561,8 +577,15 @@ func (m model) viewSyncPolicies(w int) string {
 		b.WriteString(m.th.dim.Render("No policies of this type in the source tenant."))
 		return b.String()
 	}
-	startp, endp := window(m.syncPolCursor, len(st.policies), 14)
-	for i := startp; i < endp; i++ {
+	visible := syncPolVisible(st.policies, m.filterQuery)
+	b.WriteString(m.filterLine(len(visible), len(st.policies)))
+	if len(visible) == 0 {
+		b.WriteString(m.th.dim.Render("No policies match the filter."))
+		return b.String()
+	}
+	startp, endp := window(filteredPos(m.syncPolCursor, visible), len(visible), 14)
+	for vp := startp; vp < endp; vp++ {
+		i := visible[vp]
 		p := st.policies[i]
 		box := m.th.dim.Render("[ ]")
 		if p.sel {
@@ -575,7 +598,7 @@ func (m model) viewSyncPolicies(w int) string {
 		m.recordHit(&b, i)
 		b.WriteString(box + " " + name + "\n")
 	}
-	if sb := m.scrollbar(startp, endp, len(st.policies)); sb != "" {
+	if sb := m.scrollbar(startp, endp, len(visible)); sb != "" {
 		b.WriteString("  " + sb + "\n")
 	}
 	b.WriteString("\n" + m.th.accent.Render(fmt.Sprintf("%d of %d selected", countSelected(st.policies), len(st.policies))))

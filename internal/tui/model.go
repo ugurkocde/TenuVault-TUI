@@ -117,6 +117,11 @@ type model struct {
 	// the read-only View can populate what the next Update reads.
 	hits *uiHits
 
+	// "/" search filter for the long list screens. filterQuery narrows the
+	// visible items by name; the list cursors keep original item indexes.
+	filterActive bool
+	filterQuery  string
+
 	// connections
 	conns      []connection.Connection
 	sourceIdx  int

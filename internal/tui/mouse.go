@@ -70,6 +70,9 @@ func (m model) handleMouse(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 		}
 		for _, r := range m.hits.rows {
 			if r.y == e.Y {
+				// Commit an in-progress "/" filter so the synthesized action key is
+				// handled as navigation, not typed into the query.
+				m.filterActive = false
 				m.setListCursor(r.index)
 				if a := m.hits.action; a != "" {
 					mm, cmd := m.handleKey(a)

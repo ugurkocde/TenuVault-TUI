@@ -212,9 +212,9 @@ func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 		m.cancel()
 		return m, tea.Quit
 	}
-	// "?" toggles help everywhere except text-entry screens, where it is a
-	// perfectly valid character (client secrets often contain one).
-	if key == "?" && m.screen != screenAuthForm {
+	// "?" toggles help everywhere except text entry: the auth form and an
+	// active "/" filter, where it is a perfectly valid character.
+	if key == "?" && m.screen != screenAuthForm && !m.filterActive {
 		m.showHelp = !m.showHelp
 		return m, nil
 	}
@@ -386,6 +386,7 @@ func (m model) startBackupSelect() (tea.Model, tea.Cmd) {
 		m.cats = append(m.cats, catSel{pt: pt, sel: pt.Verified})
 	}
 	m.catCursor = 0
+	m.resetFilter()
 	m.goTo(screenBackupSelect)
 	return m, nil
 }
@@ -400,29 +401,38 @@ func (m model) openBrowse(mode browseMode, title string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) keyBackupSelect(key string) (tea.Model, tea.Cmd) {
+	if m.filterActive && m.filterInputKey(key) {
+		m.catCursor = snapFiltered(m.catCursor, m.catsVisible())
+		return m, nil
+	}
+	visible := m.catsVisible()
 	switch key {
+	case "/":
+		m.filterActive = true
 	case "up", "k":
-		if m.catCursor > 0 {
-			m.catCursor--
-		}
+		m.catCursor = stepFiltered(m.catCursor, -1, visible)
 	case "down", "j":
-		if m.catCursor < len(m.cats)-1 {
-			m.catCursor++
-		}
+		m.catCursor = stepFiltered(m.catCursor, 1, visible)
 	case " ", "space":
-		m.cats[m.catCursor].sel = !m.cats[m.catCursor].sel
+		if idxVisible(visible, m.catCursor) {
+			m.cats[m.catCursor].sel = !m.cats[m.catCursor].sel
+		}
 	case "a":
 		all := true
-		for _, c := range m.cats {
-			if !c.sel {
+		for _, i := range visible {
+			if !m.cats[i].sel {
 				all = false
 				break
 			}
 		}
-		for i := range m.cats {
+		for _, i := range visible {
 			m.cats[i].sel = !all
 		}
 	case "esc":
+		if m.filterQuery != "" {
+			m.filterQuery = ""
+			return m, nil
+		}
 		m.goTo(screenDashboard)
 	case "q":
 		m.goTo(screenDashboard)
@@ -473,6 +483,7 @@ func (m model) keyBrowse(key string) (tea.Model, tea.Cmd) {
 			m.restoreItems = buildRestoreItems(b)
 			m.restoreCursor, m.restoreScroll = 0, 0
 			m.syncMode = m.browseMode == modeSyncBackup
+			m.resetFilter()
 			m.goTo(screenRestorePick)
 		case modeDiffA:
 			a := b
@@ -504,6 +515,7 @@ func (m model) keyBrowseDetail(key string) (tea.Model, tea.Cmd) {
 			m.catName = m.detailCats[m.detailCursor].name
 			m.catPolicies, _ = m.detail.Policies(m.catName)
 			m.policyCursor = 0
+			m.resetFilter()
 			m.goTo(screenCategoryPolicies)
 		}
 	case "esc":
@@ -519,6 +531,7 @@ func (m model) keyBrowseDetail(key string) (tea.Model, tea.Cmd) {
 			// A restore started here must never inherit sync routing from an
 			// earlier, abandoned sync flow.
 			m.syncMode = false
+			m.resetFilter()
 			m.goTo(screenRestorePick)
 		}
 	}
@@ -526,17 +539,20 @@ func (m model) keyBrowseDetail(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) keyCategoryPolicies(key string) (tea.Model, tea.Cmd) {
+	if m.filterActive && m.filterInputKey(key) {
+		m.policyCursor = snapFiltered(m.policyCursor, m.catPoliciesVisible())
+		return m, nil
+	}
+	visible := m.catPoliciesVisible()
 	switch key {
+	case "/":
+		m.filterActive = true
 	case "up", "k":
-		if m.policyCursor > 0 {
-			m.policyCursor--
-		}
+		m.policyCursor = stepFiltered(m.policyCursor, -1, visible)
 	case "down", "j":
-		if m.policyCursor < len(m.catPolicies)-1 {
-			m.policyCursor++
-		}
+		m.policyCursor = stepFiltered(m.policyCursor, 1, visible)
 	case "enter":
-		if len(m.catPolicies) > 0 {
+		if idxVisible(visible, m.policyCursor) {
 			raw, err := store.Read(m.catPolicies[m.policyCursor].Path)
 			if err == nil {
 				m.policyLines = strings.Split(string(raw), "\n")
@@ -546,7 +562,13 @@ func (m model) keyCategoryPolicies(key string) (tea.Model, tea.Cmd) {
 			m.policyScroll = 0
 			m.goTo(screenPolicyView)
 		}
-	case "esc", "q":
+	case "esc":
+		if m.filterQuery != "" {
+			m.filterQuery = ""
+			return m, nil
+		}
+		m.goTo(screenBrowseDetail)
+	case "q":
 		m.goTo(screenBrowseDetail)
 	}
 	return m, nil
@@ -618,31 +640,40 @@ func (m model) keyDiffResult(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) keyRestorePick(key string) (tea.Model, tea.Cmd) {
+	if m.filterActive && m.filterInputKey(key) {
+		m.restoreCursor = snapFiltered(m.restoreCursor, m.restoreVisible())
+		return m, nil
+	}
+	visible := m.restoreVisible()
 	switch key {
+	case "/":
+		m.filterActive = true
 	case "up", "k":
-		if m.restoreCursor > 0 {
-			m.restoreCursor--
-		}
+		m.restoreCursor = stepFiltered(m.restoreCursor, -1, visible)
 	case "down", "j":
-		if m.restoreCursor < len(m.restoreItems)-1 {
-			m.restoreCursor++
-		}
+		m.restoreCursor = stepFiltered(m.restoreCursor, 1, visible)
 	case " ", "space":
-		if len(m.restoreItems) > 0 {
+		if idxVisible(visible, m.restoreCursor) {
 			m.restoreItems[m.restoreCursor].sel = !m.restoreItems[m.restoreCursor].sel
 		}
 	case "a":
 		all := true
-		for _, r := range m.restoreItems {
-			if !r.sel {
+		for _, i := range visible {
+			if !m.restoreItems[i].sel {
 				all = false
 				break
 			}
 		}
-		for i := range m.restoreItems {
+		for _, i := range visible {
 			m.restoreItems[i].sel = !all
 		}
-	case "esc", "q":
+	case "esc":
+		if m.filterQuery != "" {
+			m.filterQuery = ""
+			return m, nil
+		}
+		m.goTo(screenDashboard)
+	case "q":
 		m.goTo(screenDashboard)
 	case "enter":
 		sel := m.selectedRestoreItems()

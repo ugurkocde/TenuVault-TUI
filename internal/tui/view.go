@@ -35,7 +35,7 @@ func (m model) render() string {
 	case screenDashboard:
 		body, hints = m.viewDashboard(w), "b backup · l browse · d compare · r restore · y sync · t tenants · q quit"
 	case screenBackupSelect:
-		body, hints = m.viewBackupSelect(w), "space toggle · a all · enter start · esc back"
+		body, hints = m.viewBackupSelect(w), "space toggle · a all · / filter · enter start · esc back"
 	case screenProgress:
 		body, hints = m.viewProgress(w)
 	case screenBrowse:
@@ -43,7 +43,7 @@ func (m model) render() string {
 	case screenBrowseDetail:
 		body, hints = m.viewBrowseDetail(w), "↑/↓ move · enter open · r restore · esc back"
 	case screenCategoryPolicies:
-		body, hints = m.viewCategoryPolicies(w), "↑/↓ move · enter view JSON · esc back"
+		body, hints = m.viewCategoryPolicies(w), "↑/↓ move · / filter · enter view JSON · esc back"
 	case screenPolicyView:
 		body, hints = m.viewPolicyView(w), "↑/↓ scroll · esc back"
 	case screenSettings:
@@ -55,7 +55,7 @@ func (m model) render() string {
 	case screenSyncSelect:
 		body, hints = m.viewSyncSelect(w), "space whole type · enter pick policies · n next · esc back"
 	case screenSyncPolicies:
-		body, hints = m.viewSyncPolicies(w), "space toggle · a all · esc back"
+		body, hints = m.viewSyncPolicies(w), "space toggle · a all · / filter · esc back"
 	case screenSyncTarget:
 		body, hints = m.viewSyncTarget(w), "↑/↓ move · enter pick target · esc back"
 	case screenSyncNaming:
@@ -67,7 +67,7 @@ func (m model) render() string {
 	case screenDiffResult:
 		body, hints = m.viewDiffResult(w), "↑/↓ scroll · esc back"
 	case screenRestorePick:
-		body, hints = m.viewRestorePick(w), "space toggle · a all · enter review · esc back"
+		body, hints = m.viewRestorePick(w), "space toggle · a all · / filter · enter review · esc back"
 	case screenRestoreConfirm:
 		body, hints = m.viewRestoreConfirm(w), "y confirm · n cancel"
 	case screenRestoreResult:
@@ -78,6 +78,10 @@ func (m model) render() string {
 
 	if m.hits != nil {
 		m.finalizeHits()
+	}
+
+	if m.filterActive {
+		hints = "type to filter · backspace delete · enter keep · esc clear"
 	}
 
 	header := m.header(w)
@@ -219,8 +223,14 @@ func (m model) viewDashboard(w int) string {
 
 func (m model) viewBackupSelect(w int) string {
 	var b strings.Builder
+	visible := m.catsVisible()
+	pos := 0
+	if len(visible) > 0 {
+		pos = filteredPos(m.catCursor, visible) + 1
+	}
 	b.WriteString(m.th.crumb.Render("Dashboard › Back up now") + "  " +
-		m.th.cardLabel.Render(fmt.Sprintf("(%d/%d)", m.catCursor+1, len(m.cats))) + "\n\n")
+		m.th.cardLabel.Render(fmt.Sprintf("(%d/%d)", pos, len(visible))) + "\n\n")
+	b.WriteString(m.filterLine(len(visible), len(m.cats)))
 
 	selected := 0
 	for _, c := range m.cats {
@@ -229,10 +239,14 @@ func (m model) viewBackupSelect(w int) string {
 		}
 	}
 
+	if len(visible) == 0 {
+		b.WriteString(m.th.dim.Render("No categories match the filter.") + "\n")
+	}
 	// Window the long list around the cursor; print group headers inline.
-	start, end := window(m.catCursor, len(m.cats), 16)
+	start, end := window(filteredPos(m.catCursor, visible), len(visible), 16)
 	lastGroup := ""
-	for i := start; i < end; i++ {
+	for vp := start; vp < end; vp++ {
+		i := visible[vp]
 		c := m.cats[i]
 		if c.pt.Group != lastGroup {
 			if lastGroup != "" {
@@ -258,7 +272,7 @@ func (m model) viewBackupSelect(w int) string {
 		m.recordHit(&b, i)
 		b.WriteString("  " + box + " " + label + tag + "\n")
 	}
-	if sb := m.scrollbar(start, end, len(m.cats)); sb != "" {
+	if sb := m.scrollbar(start, end, len(visible)); sb != "" {
 		b.WriteString("  " + sb + "\n")
 	}
 	b.WriteString("\n" + m.th.accent.Render(fmt.Sprintf("%d of %d selected", selected, len(m.cats))))
@@ -377,8 +391,15 @@ func (m model) viewCategoryPolicies(w int) string {
 		b.WriteString(m.th.dim.Render("No policies in this category."))
 		return b.String()
 	}
-	start, end := window(m.policyCursor, len(m.catPolicies), 14)
-	for i := start; i < end; i++ {
+	visible := m.catPoliciesVisible()
+	b.WriteString(m.filterLine(len(visible), len(m.catPolicies)))
+	if len(visible) == 0 {
+		b.WriteString(m.th.dim.Render("No policies match the filter."))
+		return b.String()
+	}
+	start, end := window(filteredPos(m.policyCursor, visible), len(visible), 14)
+	for vp := start; vp < end; vp++ {
+		i := visible[vp]
 		p := m.catPolicies[i]
 		marker := "  "
 		name := m.th.normal.Render(p.Name)
@@ -389,7 +410,7 @@ func (m model) viewCategoryPolicies(w int) string {
 		m.recordHit(&b, i)
 		b.WriteString(marker + name + "\n")
 	}
-	if sb := m.scrollbar(start, end, len(m.catPolicies)); sb != "" {
+	if sb := m.scrollbar(start, end, len(visible)); sb != "" {
 		b.WriteString("  " + sb + "\n")
 	}
 	return b.String()
@@ -489,8 +510,15 @@ func (m model) viewRestorePick(w int) string {
 			selected++
 		}
 	}
-	start, end := window(m.restoreCursor, len(m.restoreItems), 12)
-	for i := start; i < end; i++ {
+	visible := m.restoreVisible()
+	b.WriteString(m.filterLine(len(visible), len(m.restoreItems)))
+	if len(visible) == 0 {
+		b.WriteString(m.th.dim.Render("No policies match the filter."))
+		return b.String()
+	}
+	start, end := window(filteredPos(m.restoreCursor, visible), len(visible), 12)
+	for vp := start; vp < end; vp++ {
+		i := visible[vp]
 		r := m.restoreItems[i]
 		box := m.th.dim.Render("[ ]")
 		if r.sel {
@@ -503,7 +531,7 @@ func (m model) viewRestorePick(w int) string {
 		m.recordHit(&b, i)
 		b.WriteString(box + " " + m.th.cardLabel.Render(r.item.Category) + "  " + name + "\n")
 	}
-	if sb := m.scrollbar(start, end, len(m.restoreItems)); sb != "" {
+	if sb := m.scrollbar(start, end, len(visible)); sb != "" {
 		b.WriteString("  " + sb + "\n")
 	}
 	b.WriteString("\n" + m.th.accent.Render(fmt.Sprintf("%d of %d selected", selected, len(m.restoreItems))))
