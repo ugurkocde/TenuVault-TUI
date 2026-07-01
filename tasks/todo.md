@@ -84,3 +84,22 @@ Acceptance criteria results (2026-07-01):
 
 Changes are uncommitted in the working tree (16 files, +421/-56), ready for
 review and commit.
+
+## Integration for v1.3.0 (2026-07-01)
+
+Branch integrate/v1.3.0 combines, on top of origin/main (8922040):
+
+1. This session's bug fixes and features (rebased; conflicts resolved in
+   internal/tui/commands.go and internal/graph/graph_test.go - the three
+   retry tests were rewritten in upstream's roundTripFunc test style).
+2. Backup parallelization from the spin-off task (4-worker pool per
+   category), reconciled with the write-error recording and the
+   keep-partial-and-finalize-Cancelled cancellation semantics. The old
+   TestRunStopsOnCancellation assertion (context.Canceled error) was updated
+   to the merged behavior (nil error, Status Cancelled, manifest present).
+3. The "/" list filter from the spin-off task, reconciled with the sync
+   load-error retry key, the auth-form "?" fix, and the browse-detail
+   restore syncMode reset.
+
+Verification: gofmt clean, go build, go vet, go test -race ./... all green,
+golangci-lint (same config CI uses) reports 0 issues.
