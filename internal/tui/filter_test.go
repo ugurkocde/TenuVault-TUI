@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -8,6 +9,7 @@ import (
 	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
 	"github.com/ugurkocde/TenuVault-TUI/internal/config"
 	"github.com/ugurkocde/TenuVault-TUI/internal/restore"
+	"github.com/ugurkocde/TenuVault-TUI/internal/store"
 )
 
 // press feeds a sequence of key strings through handleKey and returns the
@@ -228,4 +230,126 @@ func TestBackupSelectFilter(t *testing.T) {
 	if sel != len(visible) {
 		t.Errorf("selected %d categories, want only the %d filtered ones", sel, len(visible))
 	}
+}
+
+// TestSortComposesWithFilter sorts the restore picker by name while a filter
+// is active: only matching items show, in name order, and toggles still hit
+// the item under the cursor by original index.
+func TestSortComposesWithFilter(t *testing.T) {
+	m := New(config.Default())
+	m.screen = screenRestorePick
+	m.restoreItems = []restoreSel{
+		{item: restore.Item{Category: "C", Name: "Zulu alpha"}},  // 0
+		{item: restore.Item{Category: "C", Name: "Beta"}},        // 1
+		{item: restore.Item{Category: "C", Name: "Accra alpha"}}, // 2
+		{item: restore.Item{Category: "C", Name: "Mike alpha"}},  // 3
+	}
+
+	m = press(t, m, "/", "a", "l", "p", "h", "a", "enter", "s")
+	if m.listSort != sortName {
+		t.Fatalf("listSort = %v, want sortName", m.listSort)
+	}
+	if got, want := m.restoreVisible(), []int{2, 3, 0}; !equalInts(got, want) {
+		t.Fatalf("visible = %v, want %v (filtered then name-sorted)", got, want)
+	}
+
+	// The cursor snapped into the visible set; move to the last visible item
+	// (Zulu alpha, original index 0) and toggle it.
+	m = press(t, m, "down", "down", " ")
+	if !m.restoreItems[0].sel {
+		t.Error("space did not toggle the item under the cursor (original index 0)")
+	}
+	if m.restoreItems[1].sel || m.restoreItems[2].sel || m.restoreItems[3].sel {
+		t.Error("space toggled an item other than the cursor's")
+	}
+
+	// s cycles back to the default order without touching the filter.
+	m = press(t, m, "s")
+	if m.listSort != sortDefault || m.filterQuery != "alpha" {
+		t.Errorf("after second s: sort %v query %q, want default order with query kept", m.listSort, m.filterQuery)
+	}
+}
+
+// TestSortKeyWhileFilterInputActive ensures "s" typed during filter input goes
+// into the query, not the sort mode.
+func TestSortKeyWhileFilterInputActive(t *testing.T) {
+	m := New(config.Default())
+	m.screen = screenRestorePick
+	m.restoreItems = []restoreSel{{item: restore.Item{Category: "C", Name: "Sun"}}}
+
+	m = press(t, m, "/", "s")
+	if m.listSort != sortDefault {
+		t.Errorf("listSort changed while typing into the filter")
+	}
+	if m.filterQuery != "s" {
+		t.Errorf("filterQuery = %q, want %q", m.filterQuery, "s")
+	}
+}
+
+// TestSortResetsOnScreenEntry pins that entering a list screen starts unsorted.
+func TestSortResetsOnScreenEntry(t *testing.T) {
+	m := New(config.Default())
+	m.screen = screenBrowse
+	m.connected = true
+	m.listSort = sortName
+
+	out, _ := m.openBrowse(modeView, "Browse backups")
+	m2 := out.(model)
+	if m2.listSort != sortDefault {
+		t.Error("openBrowse kept the previous sort mode")
+	}
+}
+
+// TestBrowseSortToggle sorts the backups list by folder name and back.
+func TestBrowseSortToggle(t *testing.T) {
+	m := New(config.Default())
+	m.screen = screenBrowse
+	m.backups = []store.Backup{
+		{Folder: "backup-2026-06-27-020000"},
+		{Folder: "backup-2026-06-26-020000"},
+	}
+
+	if got := m.browseVisible(); !equalInts(got, []int{0, 1}) {
+		t.Fatalf("default browse order = %v, want store order", got)
+	}
+	m = press(t, m, "s")
+	if got := m.browseVisible(); !equalInts(got, []int{1, 0}) {
+		t.Fatalf("name-sorted browse order = %v, want [1 0]", got)
+	}
+	// The cursor stays on the same backup (original index) across the toggle.
+	if m.browseCursor != 0 {
+		t.Errorf("browseCursor = %d, want 0 (same item)", m.browseCursor)
+	}
+}
+
+// TestEmptyFilterHint renders the zero-match hint with the query and drops it
+// once something matches.
+func TestEmptyFilterHint(t *testing.T) {
+	m := New(config.Default())
+	m.width = 100
+	m.screen = screenRestorePick
+	m.restoreItems = []restoreSel{{item: restore.Item{Category: "C", Name: "Alpha"}}}
+
+	m = press(t, m, "/", "x", "y", "z")
+	out := m.render()
+	if !strings.Contains(out, `no matches for "xyz" (esc to clear)`) {
+		t.Errorf("zero-match render missing the hint:\n%s", out)
+	}
+
+	m = press(t, m, "esc") // clears the query while input is active
+	if out := m.render(); strings.Contains(out, "no matches for") {
+		t.Error("hint still rendered after esc cleared the query")
+	}
+}
+
+func equalInts(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

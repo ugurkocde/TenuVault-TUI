@@ -40,6 +40,11 @@ type PolicyType struct {
 
 	RestoreSupported bool // false = backup-only (complex/upload/singleton)
 	Verified         bool // confirmed live via Lokka
+
+	// NoAssignments marks types with no /assignments navigation (tenant-admin
+	// metadata types) or that embed their targeting in the policy body
+	// (conditional access). Assignment backup skips them.
+	NoAssignments bool
 }
 
 // RestoreEndpoint returns the path a restored item is POSTed to.
@@ -87,15 +92,15 @@ func All() []PolicyType {
 
 		// --- Tenant administration ---
 		{Key: "roleScopeTags", Friendly: "Scope tags", Category: "RoleScopeTags", Group: "Tenant admin", Version: "beta",
-			ListPath: "/deviceManagement/roleScopeTags", NameField: "displayName", RestoreSupported: true, Verified: true},
+			ListPath: "/deviceManagement/roleScopeTags", NameField: "displayName", RestoreSupported: true, Verified: true, NoAssignments: true},
 		{Key: "deviceCategories", Friendly: "Device categories", Category: "DeviceCategories", Group: "Tenant admin", Version: "beta",
-			ListPath: "/deviceManagement/deviceCategories", NameField: "displayName", RestoreSupported: true, Verified: true},
+			ListPath: "/deviceManagement/deviceCategories", NameField: "displayName", RestoreSupported: true, Verified: true, NoAssignments: true},
 		{Key: "termsAndConditions", Friendly: "Terms and conditions", Category: "TermsAndConditions", Group: "Tenant admin", Version: "beta",
 			ListPath: "/deviceManagement/termsAndConditions", NameField: "displayName", RestoreSupported: true, Verified: true},
 		{Key: "notificationTemplates", Friendly: "Notification templates", Category: "NotificationTemplates", Group: "Tenant admin", Version: "beta",
-			ListPath: "/deviceManagement/notificationMessageTemplates", NameField: "displayName", RestoreSupported: true, Verified: true},
+			ListPath: "/deviceManagement/notificationMessageTemplates", NameField: "displayName", RestoreSupported: true, Verified: true, NoAssignments: true},
 		{Key: "assignmentFilters", Friendly: "Assignment filters", Category: "AssignmentFilters", Group: "Tenant admin", Version: "beta",
-			ListPath: "/deviceManagement/assignmentFilters", NameField: "displayName", RestoreSupported: true, Verified: true},
+			ListPath: "/deviceManagement/assignmentFilters", NameField: "displayName", RestoreSupported: true, Verified: true, NoAssignments: true},
 
 		// --- Apps & app management ---
 		{Key: "appConfigDevice", Friendly: "App configuration (devices)", Category: "AppConfigurationPolicies", Group: "Apps", Version: "beta",
@@ -111,11 +116,11 @@ func All() []PolicyType {
 		{Key: "windowsInformationProtection", Friendly: "Windows information protection", Category: "WindowsInformationProtection", Group: "Apps", Version: "beta",
 			ListPath: "/deviceAppManagement/mdmWindowsInformationProtectionPolicies", NameField: "displayName", RestoreSupported: true, Verified: true},
 		{Key: "appCategories", Friendly: "App categories", Category: "AppCategories", Group: "Apps", Version: "beta",
-			ListPath: "/deviceAppManagement/mobileAppCategories", NameField: "displayName", RestoreSupported: true, Verified: true},
+			ListPath: "/deviceAppManagement/mobileAppCategories", NameField: "displayName", RestoreSupported: true, Verified: true, NoAssignments: true},
 
 		// --- Identity ---
 		{Key: "conditionalAccess", Friendly: "Conditional access", Category: "ConditionalAccessPolicies", Group: "Identity", Version: "beta",
-			ListPath: "/identity/conditionalAccess/policies", NameField: "displayName", RestoreSupported: true, Verified: true},
+			ListPath: "/identity/conditionalAccess/policies", NameField: "displayName", RestoreSupported: true, Verified: true, NoAssignments: true},
 	}
 }
 

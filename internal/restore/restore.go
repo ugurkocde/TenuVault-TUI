@@ -7,8 +7,7 @@ import (
 	"context"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/graph"
-	"github.com/ugurkocde/TenuVault-TUI/internal/policyops"
-	"github.com/ugurkocde/TenuVault-TUI/internal/store"
+	"github.com/ugurkocde/TenuVault-TUI/internal/syncer"
 )
 
 // RestorePrefix is prepended to restored policy names so they are obvious and
@@ -29,19 +28,18 @@ type Result struct {
 	Err   error
 }
 
-// Restore creates each item in Graph and returns per-item results.
+// Restore creates each item in Graph and returns per-item results in input
+// order. It delegates to the syncer's bounded worker pool (a restore is a
+// backup-sourced sync into the same tenant with the restore prefix).
 func Restore(ctx context.Context, c graph.API, items []Item) []Result {
-	results := make([]Result, 0, len(items))
-	for _, it := range items {
-		res := Result{Item: it}
-		raw, err := store.Read(it.Path)
-		if err != nil {
-			res.Err = err
-			results = append(results, res)
-			continue
-		}
-		res.NewID, res.Err = policyops.Create(ctx, c, it.Category, raw, RestorePrefix)
-		results = append(results, res)
+	sitems := make([]syncer.Item, len(items))
+	for i, it := range items {
+		sitems[i] = syncer.Item{Category: it.Category, Name: it.Name, Path: it.Path}
+	}
+	sres := syncer.Run(ctx, c, nil, sitems, RestorePrefix, nil)
+	results := make([]Result, len(sres))
+	for i, r := range sres {
+		results[i] = Result{Item: items[i], NewID: r.NewID, Err: r.Err}
 	}
 	return results
 }

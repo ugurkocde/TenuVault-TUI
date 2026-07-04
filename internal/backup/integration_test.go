@@ -2,11 +2,14 @@ package backup
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -212,5 +215,177 @@ func TestRunStopsOnCancellation(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(res.Path, "metadata.json")); err != nil {
 		t.Errorf("metadata.json missing after mid-run cancel: %v", err)
+	}
+}
+
+// TestRunWritesChecksums re-hashes every written policy file against the
+// checksums.json sidecar, including a duplicate display name that lands under
+// a " (2)" file.
+func TestRunWritesChecksums(t *testing.T) {
+	dc, _ := catalog.ByKey("deviceConfigurations")
+	f := &graphtest.Fake{Lists: map[string][]json.RawMessage{
+		"beta " + dc.ListPath: {
+			[]byte(`{"@odata.type":"#microsoft.graph.windows10GeneralConfiguration","id":"1","displayName":"BitLocker"}`),
+			[]byte(`{"@odata.type":"#microsoft.graph.windows10GeneralConfiguration","id":"2","displayName":"BitLocker"}`),
+		},
+	}}
+
+	root := t.TempDir()
+	res, err := Run(context.Background(), f, []catalog.PolicyType{dc},
+		Options{Root: root, Tenant: graph.Tenant{ID: "t1"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sums, err := store.ReadChecksums(res.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sums.Algorithm != "sha256" {
+		t.Errorf("algorithm = %q", sums.Algorithm)
+	}
+	if len(sums.Files) != 2 {
+		t.Fatalf("recorded files = %v, want 2 (duplicate name must be recorded under its real file)", sums.Files)
+	}
+	for rel, want := range sums.Files {
+		data, err := os.ReadFile(filepath.Join(res.Path, rel))
+		if err != nil {
+			t.Fatalf("recorded file %s unreadable: %v", rel, err)
+		}
+		sum := sha256.Sum256(data)
+		if hex.EncodeToString(sum[:]) != want {
+			t.Errorf("checksum mismatch for %s", rel)
+		}
+	}
+
+	rep, err := store.Verify(res.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.Clean() || rep.OK != 2 {
+		t.Errorf("fresh backup does not verify: %+v", rep)
+	}
+}
+
+// getCounter wraps a graph.API counting per-path GET calls.
+type getCounter struct {
+	graph.API
+	mu    sync.Mutex
+	calls map[string]int
+}
+
+func (g *getCounter) Get(ctx context.Context, version, path string, q url.Values) (json.RawMessage, error) {
+	g.mu.Lock()
+	g.calls[path]++
+	g.mu.Unlock()
+	return g.API.Get(ctx, version, path, q)
+}
+
+// TestBackupResolvesGroupNames: with assignments included, group ids from
+// assignment targets are resolved to names in groups.json, one GET per group
+// id no matter how many policies target it.
+func TestBackupResolvesGroupNames(t *testing.T) {
+	dc, _ := catalog.ByKey("deviceConfigurations")
+	f := &graphtest.Fake{
+		Lists: map[string][]json.RawMessage{
+			"beta " + dc.ListPath: {
+				[]byte(`{"@odata.type":"#microsoft.graph.windows10GeneralConfiguration","id":"1","displayName":"BitLocker"}`),
+				[]byte(`{"@odata.type":"#microsoft.graph.windows10GeneralConfiguration","id":"2","displayName":"Defender"}`),
+			},
+			"beta " + dc.ListPath + "/1/assignments": {
+				[]byte(`{"id":"a1","target":{"@odata.type":"#microsoft.graph.groupAssignmentTarget","groupId":"g1"}}`),
+				[]byte(`{"id":"a2","target":{"@odata.type":"#microsoft.graph.allDevicesAssignmentTarget"}}`),
+			},
+			"beta " + dc.ListPath + "/2/assignments": {
+				[]byte(`{"id":"a3","target":{"@odata.type":"#microsoft.graph.exclusionGroupAssignmentTarget","groupId":"g1"}}`),
+			},
+		},
+		Gets: map[string]json.RawMessage{
+			"v1.0 /groups/g1": []byte(`{"displayName":"Pilot Devices"}`),
+		},
+	}
+	g := &getCounter{API: f, calls: map[string]int{}}
+
+	root := t.TempDir()
+	res, err := Run(context.Background(), g, []catalog.PolicyType{dc},
+		Options{Root: root, Tenant: graph.Tenant{ID: "t1"}, IncludeAssignments: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "Success" {
+		t.Errorf("status = %q", res.Status)
+	}
+
+	data, err := os.ReadFile(filepath.Join(res.Path, "groups.json"))
+	if err != nil {
+		t.Fatalf("groups.json missing: %v", err)
+	}
+	var names map[string]string
+	if err := json.Unmarshal(data, &names); err != nil {
+		t.Fatal(err)
+	}
+	if names["g1"] != "Pilot Devices" || len(names) != 1 {
+		t.Errorf("groups.json = %v", names)
+	}
+	if n := g.calls["/groups/g1"]; n != 1 {
+		t.Errorf("group g1 fetched %d times, want 1 (cache)", n)
+	}
+
+	// Assignments are embedded in the policy file itself.
+	pdata, err := os.ReadFile(filepath.Join(res.Path, "DeviceConfigurations", "BitLocker.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(pdata), `"groupId": "g1"`) {
+		t.Errorf("policy file missing embedded assignment target:\n%s", pdata)
+	}
+}
+
+// deny403 wraps a graph.API and rejects /groups lookups with a 403.
+type deny403 struct{ graph.API }
+
+func (d *deny403) Get(ctx context.Context, version, path string, q url.Values) (json.RawMessage, error) {
+	if strings.HasPrefix(path, "/groups/") {
+		return nil, &graph.StatusError{Code: 403, Method: "GET", Path: path, Detail: "Authorization_RequestDenied: Insufficient privileges"}
+	}
+	return d.API.Get(ctx, version, path, q)
+}
+
+// TestBackupDegradesWithoutGroupScope: a 403 on the first group lookup
+// disables name resolution; the backup still succeeds with raw ids and a
+// single note in backup.log, and no groups.json is written.
+func TestBackupDegradesWithoutGroupScope(t *testing.T) {
+	dc, _ := catalog.ByKey("deviceConfigurations")
+	f := &graphtest.Fake{Lists: map[string][]json.RawMessage{
+		"beta " + dc.ListPath: {
+			[]byte(`{"@odata.type":"#microsoft.graph.windows10GeneralConfiguration","id":"1","displayName":"BitLocker"}`),
+		},
+		"beta " + dc.ListPath + "/1/assignments": {
+			[]byte(`{"id":"a1","target":{"groupId":"g1"}}`),
+		},
+	}}
+
+	root := t.TempDir()
+	res, err := Run(context.Background(), &deny403{API: f}, []catalog.PolicyType{dc},
+		Options{Root: root, Tenant: graph.Tenant{ID: "t1"}, IncludeAssignments: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "Success" {
+		t.Errorf("status = %q, want Success despite the missing group scope", res.Status)
+	}
+	if _, err := os.Stat(filepath.Join(res.Path, "groups.json")); !os.IsNotExist(err) {
+		t.Error("groups.json written despite no resolvable names")
+	}
+	logData, err := os.ReadFile(filepath.Join(res.Path, "backup.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logData), "Group.Read.All not granted") {
+		t.Errorf("backup.log missing the degrade note:\n%s", logData)
+	}
+	pdata, _ := os.ReadFile(filepath.Join(res.Path, "DeviceConfigurations", "BitLocker.json"))
+	if !strings.Contains(string(pdata), `"groupId": "g1"`) {
+		t.Error("raw group id lost from the policy file")
 	}
 }

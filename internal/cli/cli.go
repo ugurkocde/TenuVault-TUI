@@ -6,9 +6,11 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/auth"
@@ -17,6 +19,7 @@ import (
 	"github.com/ugurkocde/TenuVault-TUI/internal/config"
 	"github.com/ugurkocde/TenuVault-TUI/internal/diff"
 	"github.com/ugurkocde/TenuVault-TUI/internal/graph"
+	"github.com/ugurkocde/TenuVault-TUI/internal/jsonutil"
 	"github.com/ugurkocde/TenuVault-TUI/internal/store"
 	"github.com/ugurkocde/TenuVault-TUI/internal/syncer"
 )
@@ -162,6 +165,204 @@ func Compare(args []string) int {
 	}
 	fmt.Printf("%d changes\n", len(changes))
 	return 1
+}
+
+// Verify checks a backup folder against its recorded checksums. Exit codes:
+// 0 intact, 1 integrity failure, 2 usage/read error (including backups from
+// versions that predate checksum support).
+func Verify(args []string) int {
+	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: tenuvault verify <backup-dir>")
+		return 2
+	}
+	rep, err := store.Verify(fs.Arg(0))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 2
+	}
+	for _, f := range rep.Mismatched {
+		fmt.Printf("MISMATCH %s\n", f)
+	}
+	for _, f := range rep.Missing {
+		fmt.Printf("MISSING  %s\n", f)
+	}
+	for _, f := range rep.Extra {
+		fmt.Printf("EXTRA    %s\n", f)
+	}
+	if !rep.Clean() {
+		fmt.Printf("%d ok, %d mismatched, %d missing, %d extra\n",
+			rep.OK, len(rep.Mismatched), len(rep.Missing), len(rep.Extra))
+		return 1
+	}
+	fmt.Printf("verified %d files\n", rep.OK)
+	return 0
+}
+
+// Sync copies policies into the target tenant (authenticated via the AZURE_*
+// env vars, exactly like restore - the write side always uses the default
+// credentials). The source is either a saved backup (--from-backup) or a live
+// tenant supplied via TENUVAULT_SOURCE_TENANT_ID, TENUVAULT_SOURCE_CLIENT_ID,
+// and TENUVAULT_SOURCE_CLIENT_SECRET (or TENUVAULT_SOURCE_CERT_PATH plus
+// TENUVAULT_SOURCE_CERT_PASSWORD). Exit codes: 0 ok, 1 failures, 2 usage/auth.
+func Sync(args []string) int {
+	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
+	fromBackup := fs.String("from-backup", "", "backup folder to copy from (omit to sync from a TENUVAULT_SOURCE_* live tenant)")
+	categories := fs.String("categories", "", "comma-separated policy type keys (default: all restore-supported)")
+	names := fs.String("names", "", "comma-separated exact display names to include (default: all)")
+	prefix := fs.String("prefix", "[Synced] ", "name prefix for created policies (\"\" keeps original)")
+	dryRun := fs.Bool("dry-run", false, "print what would be created without writing anything")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	srcCfg, haveLive := sourceConfigFromEnv()
+	if (*fromBackup != "") == haveLive {
+		fmt.Fprintln(os.Stderr, "error: provide exactly one source: --from-backup <dir>, or TENUVAULT_SOURCE_* env vars for a live tenant")
+		return 2
+	}
+
+	var (
+		items          []syncer.Item
+		source         graph.API
+		sourceTenantID string
+	)
+	if *fromBackup != "" {
+		items = backupItems(*fromBackup, *categories)
+		// The manifest records which tenant the backup came from; used below to
+		// refuse an accidental same-tenant duplicate without a prefix.
+		if data, err := os.ReadFile(filepath.Join(*fromBackup, "metadata.json")); err == nil {
+			var meta store.Metadata
+			if json.Unmarshal(data, &meta) == nil {
+				sourceTenantID = meta.TenantID
+			}
+		}
+	} else {
+		c, tenant, err := connect(srcCfg)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error: source auth failed:", err)
+			return 1
+		}
+		source, sourceTenantID = c, tenant.ID
+		ctx := context.Background()
+		for _, pt := range syncTypes(*categories) {
+			raws, err := c.ListAll(ctx, pt.Version, pt.ListPath, nil)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: list %s: %v\n", pt.Key, err)
+				return 1
+			}
+			for _, raw := range raws {
+				items = append(items, syncer.Item{Category: pt.Category, TypeKey: pt.Key, Name: jsonutil.DisplayName(raw, pt.NameField), Raw: raw})
+			}
+		}
+	}
+	items = filterByNames(items, *names)
+	if len(items) == 0 {
+		fmt.Fprintln(os.Stderr, "nothing to sync")
+		return 1
+	}
+
+	if *dryRun {
+		for _, it := range items {
+			fmt.Printf("+ %s%s · %s\n", *prefix, it.Name, it.Category)
+		}
+		fmt.Printf("%d policies would be created (dry run, nothing written)\n", len(items))
+		return 0
+	}
+
+	target, targetTenant, err := connect(config.Load())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error: target auth failed:", err)
+		return 1
+	}
+	if sourceTenantID != "" && sourceTenantID == targetTenant.ID && *prefix == "" {
+		fmt.Fprintln(os.Stderr, "error: source and target are the same tenant; refusing to duplicate policies without --prefix")
+		return 2
+	}
+
+	results := syncer.Run(context.Background(), target, source, items, *prefix, nil)
+	ok, fail := 0, 0
+	for _, r := range results {
+		if r.Err != nil {
+			fail++
+			fmt.Fprintf(os.Stderr, "  ✗ %s: %v\n", r.Item.Name, r.Err)
+		} else {
+			ok++
+			if r.Warn {
+				fmt.Fprintf(os.Stderr, "  ⚠ %s: created with partial content\n", r.Item.Name)
+			}
+		}
+	}
+	fmt.Printf("synced %d, %d failed\n", ok, fail)
+	if fail > 0 {
+		return 1
+	}
+	return 0
+}
+
+// sourceConfigFromEnv builds the sync-source credentials from the
+// TENUVAULT_SOURCE_* environment. The bool reports whether a live source was
+// configured at all.
+func sourceConfigFromEnv() (config.Config, bool) {
+	tenant := os.Getenv("TENUVAULT_SOURCE_TENANT_ID")
+	if tenant == "" {
+		return config.Config{}, false
+	}
+	c := config.Config{
+		TenantID:            tenant,
+		ClientID:            os.Getenv("TENUVAULT_SOURCE_CLIENT_ID"),
+		ClientSecret:        os.Getenv("TENUVAULT_SOURCE_CLIENT_SECRET"),
+		CertificatePath:     os.Getenv("TENUVAULT_SOURCE_CERT_PATH"),
+		CertificatePassword: os.Getenv("TENUVAULT_SOURCE_CERT_PASSWORD"),
+	}
+	if c.CertificatePath != "" {
+		c.AuthMethod = config.AuthCertificate
+	} else {
+		c.AuthMethod = config.AuthSecret
+	}
+	return c, true
+}
+
+// syncTypes resolves the policy types eligible for sync: the requested keys
+// (or every type when unset), restricted to restore-supported ones.
+func syncTypes(csv string) []catalog.PolicyType {
+	var out []catalog.PolicyType
+	if strings.TrimSpace(csv) == "" {
+		for _, pt := range catalog.All() {
+			if pt.RestoreSupported {
+				out = append(out, pt)
+			}
+		}
+		return out
+	}
+	for _, pt := range selectedTypes(csv) {
+		if pt.RestoreSupported {
+			out = append(out, pt)
+		}
+	}
+	return out
+}
+
+// filterByNames keeps only items whose display name is in the comma-separated
+// list (exact match); an empty list keeps everything.
+func filterByNames(items []syncer.Item, csv string) []syncer.Item {
+	if strings.TrimSpace(csv) == "" {
+		return items
+	}
+	want := map[string]bool{}
+	for _, n := range strings.Split(csv, ",") {
+		want[strings.TrimSpace(n)] = true
+	}
+	var out []syncer.Item
+	for _, it := range items {
+		if want[it.Name] {
+			out = append(out, it)
+		}
+	}
+	return out
 }
 
 // selectedTypes resolves a comma-separated key list, defaulting to verified.

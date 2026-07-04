@@ -31,6 +31,10 @@ var DelegatedScopes = []string{
 	"https://graph.microsoft.com/DeviceManagementRBAC.ReadWrite.All",
 	"https://graph.microsoft.com/Policy.ReadWrite.ConditionalAccess",
 	"https://graph.microsoft.com/Organization.Read.All",
+	// Group.Read.All only labels assignment group ids with display names in
+	// backups; without it (e.g. app-only registrations that never consented
+	// it) backups still succeed and keep the raw ids.
+	"https://graph.microsoft.com/Group.Read.All",
 }
 
 // ScopesFor returns the token scopes to request for the given auth method.

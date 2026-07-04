@@ -7,12 +7,22 @@ package syncer
 import (
 	"context"
 	"encoding/json"
+	"sync"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
 	"github.com/ugurkocde/TenuVault-TUI/internal/graph"
 	"github.com/ugurkocde/TenuVault-TUI/internal/policyops"
 	"github.com/ugurkocde/TenuVault-TUI/internal/store"
 )
+
+// syncWorkers bounds concurrent policy creates. Intune's write limits are
+// tighter than its read limits, so this must not exceed the backup pool size;
+// a 429/503/504 on a POST is retried with Retry-After by the graph client
+// (Graph rejected the request without applying it, so retrying cannot
+// double-create). Multi-step creates (e.g. admin templates, intents) run all
+// their steps inside policyops.Create, so item-level parallelism never
+// interleaves one item's own steps.
+const syncWorkers = 4
 
 // Item is one policy to copy. Exactly one source is set: Raw (+TypeKey) for a
 // live source policy, or Path for a policy file from a saved backup.
@@ -46,27 +56,67 @@ type Event struct {
 // the source tenant's client (used to fetch full policy content); it may be nil
 // when every item comes from a backup. namePrefix is prepended to copied policy
 // names ("" keeps the original name).
+//
+// Items are created by a bounded worker pool; results come back in input
+// order regardless of completion order. Progress events report the completed
+// count and are never emitted concurrently. On cancellation every item still
+// gets a result: items never attempted carry Err = context.Canceled.
 func Run(ctx context.Context, target, source graph.API, items []Item, namePrefix string, progress func(Event)) []Result {
-	results := make([]Result, 0, len(items))
 	total := len(items)
-	for i, it := range items {
-		if err := ctx.Err(); err != nil {
-			return results
-		}
-		if progress != nil {
-			progress(Event{Current: i + 1, Total: total, Name: it.Name})
-		}
-		res := Result{Item: it}
+	results := make([]Result, total)
+	started := make([]bool, total)
 
-		raw, warn, err := resolve(ctx, source, it)
-		if err != nil {
-			res.Err = err
-			results = append(results, res)
-			continue
+	var mu sync.Mutex
+	done := 0
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	workers := syncWorkers
+	if total < workers {
+		workers = total
+	}
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				it := items[i]
+				res := Result{Item: it}
+				if err := ctx.Err(); err != nil {
+					res.Err = err
+				} else if raw, warn, err := resolve(ctx, source, it); err != nil {
+					res.Err = err
+				} else {
+					res.Warn = warn
+					res.NewID, res.Err = policyops.Create(ctx, target, it.Category, raw, namePrefix)
+				}
+				mu.Lock()
+				results[i] = res
+				started[i] = true
+				done++
+				if progress != nil {
+					progress(Event{Current: done, Total: total, Name: it.Name})
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+feed:
+	for i := range items {
+		select {
+		case jobs <- i:
+		case <-ctx.Done():
+			break feed
 		}
-		res.Warn = warn
-		res.NewID, res.Err = policyops.Create(ctx, target, it.Category, raw, namePrefix)
-		results = append(results, res)
+	}
+	close(jobs)
+	wg.Wait()
+
+	// Items the feed never handed out (cancelled mid-run) are reported
+	// honestly instead of silently dropped.
+	for i := range results {
+		if !started[i] {
+			results[i] = Result{Item: items[i], Err: context.Canceled}
+		}
 	}
 	return results
 }

@@ -180,6 +180,20 @@ func runSync(runCtx, ui context.Context, target, source *graph.Client, items []s
 	}
 }
 
+// verifyDoneMsg carries the outcome of a backup integrity check.
+type verifyDoneMsg struct {
+	rep store.VerifyReport
+	err error
+}
+
+// runVerify re-hashes a backup folder against its recorded checksums.
+func runVerify(path string) tea.Cmd {
+	return func() tea.Msg {
+		rep, err := store.Verify(path)
+		return verifyDoneMsg{rep: rep, err: err}
+	}
+}
+
 // cleanupBackups deletes backups older than the retention window, reporting any
 // failure so it isn't silently swallowed.
 func cleanupBackups(root string, days int) tea.Cmd {

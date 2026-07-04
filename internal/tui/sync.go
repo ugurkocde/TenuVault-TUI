@@ -26,6 +26,7 @@ func syncerItemFromRestore(it restore.Item) syncer.Item {
 func (m model) startSync() (tea.Model, tea.Cmd) {
 	if !m.connected {
 		m.connCursor = 0
+		m.connRemove = -1
 		m.goTo(screenConnections)
 		return m, nil
 	}
@@ -66,6 +67,14 @@ func (m model) connectionRows() []connRow {
 func (m model) keyConnections(key string) (tea.Model, tea.Cmd) {
 	rows := m.connectionRows()
 	addIdx := len(rows) // last selectable row is "add"
+	// A pending removal intercepts every key: y confirms, anything else cancels.
+	if m.connRemove >= 0 {
+		if key == "y" && m.connRemove < len(rows) {
+			m.removeConnection(rows[m.connRemove])
+		}
+		m.connRemove = -1
+		return m, nil
+	}
 	switch key {
 	case "up", "k":
 		if m.connCursor > 0 {
@@ -82,34 +91,7 @@ func (m model) keyConnections(key string) (tea.Model, tea.Cmd) {
 		if m.connCursor >= len(rows) {
 			return m, nil // the "add" row, nothing to remove
 		}
-		row := rows[m.connCursor]
-		var kept []config.ConnConfig
-		for _, cc := range m.cfg.Connections {
-			if cc.TenantID != row.tenantID {
-				kept = append(kept, cc)
-			}
-		}
-		m.cfg.Connections = kept
-		if row.liveIdx >= 0 {
-			m.conns = append(m.conns[:row.liveIdx], m.conns[row.liveIdx+1:]...)
-			// Removing an earlier entry shifts everything left; follow the
-			// active source so it keeps pointing at the same tenant.
-			if row.liveIdx < m.sourceIdx {
-				m.sourceIdx--
-			}
-			if m.sourceIdx >= len(m.conns) {
-				m.sourceIdx = len(m.conns) - 1
-			}
-			if m.sourceIdx < 0 {
-				m.sourceIdx = 0
-			}
-			m.connected = len(m.conns) > 0
-		}
-		m.persistConnections()
-		if m.connCursor > 0 {
-			m.connCursor--
-		}
-		m.status, m.statusKind = "Removed "+row.label, "ok"
+		m.connRemove = m.connCursor
 	case "enter":
 		if m.connCursor == addIdx {
 			m.addingConn = true
@@ -140,6 +122,56 @@ func (m model) keyConnections(key string) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// removeConnection drops a tenant from the persisted config and, when live,
+// from the connected set, keeping every index that pointed past it stable.
+func (m *model) removeConnection(row connRow) {
+	var kept []config.ConnConfig
+	for _, cc := range m.cfg.Connections {
+		if cc.TenantID != row.tenantID {
+			kept = append(kept, cc)
+		}
+	}
+	m.cfg.Connections = kept
+	if row.liveIdx >= 0 {
+		m.conns = append(m.conns[:row.liveIdx], m.conns[row.liveIdx+1:]...)
+		// Removing an earlier entry shifts everything left; follow the
+		// active source so it keeps pointing at the same tenant.
+		if row.liveIdx < m.sourceIdx {
+			m.sourceIdx--
+		}
+		if m.sourceIdx >= len(m.conns) {
+			m.sourceIdx = len(m.conns) - 1
+		}
+		if m.sourceIdx < 0 {
+			m.sourceIdx = 0
+		}
+		// The sync source/target must follow the same tenant too; when the
+		// removed connection was the chosen one, mark it invalid so the sync
+		// confirm fails closed instead of writing to a different tenant.
+		m.syncSourceConn = shiftIdx(m.syncSourceConn, row.liveIdx)
+		m.syncTargetConn = shiftIdx(m.syncTargetConn, row.liveIdx)
+		m.connected = len(m.conns) > 0
+	}
+	m.persistConnections()
+	if m.connCursor > 0 {
+		m.connCursor--
+	}
+	m.status, m.statusKind = "Removed "+row.label, "ok"
+}
+
+// shiftIdx adjusts a connection index after the entry at removed is deleted:
+// later entries shift left, the removed entry itself becomes invalid.
+func shiftIdx(idx, removed int) int {
+	switch {
+	case idx == removed:
+		return -1
+	case idx > removed:
+		return idx - 1
+	default:
+		return idx
+	}
 }
 
 // --- sync source picker ---
@@ -173,7 +205,7 @@ func (m model) keySyncSource(key string) (tea.Model, tea.Cmd) {
 		m.syncFromBackup = true
 		m.syncMode = true
 		m.syncSourceLabel = "saved backup"
-		return m.openBrowse(modeSyncBackup, "Sync · pick a backup")
+		return m.openBrowse(modeSyncBackup, "Sync · pick a backup (step 2 of 6)")
 	}
 	return m, nil
 }
@@ -252,13 +284,15 @@ func (m model) keySyncPolicies(key string) (tea.Model, tea.Cmd) {
 	}
 	st := &m.syncTypes[m.syncActiveType]
 	if m.filterActive && m.filterInputKey(key) {
-		m.syncPolCursor = snapFiltered(m.syncPolCursor, syncPolVisible(st.policies, m.filterQuery))
+		m.syncPolCursor = snapFiltered(m.syncPolCursor, syncPolVisible(st.policies, m.filterQuery, m.listSort))
 		return m, nil
 	}
-	visible := syncPolVisible(st.policies, m.filterQuery)
+	visible := syncPolVisible(st.policies, m.filterQuery, m.listSort)
 	switch key {
 	case "/":
 		m.filterActive = true
+	case "s":
+		m.listSort = cycleSort(m.listSort)
 	case "up", "k":
 		m.syncPolCursor = stepFiltered(m.syncPolCursor, -1, visible)
 	case "down", "j":
@@ -413,8 +447,22 @@ func (m model) keySyncConfirm(key string) (tea.Model, tea.Cmd) {
 	}
 	switch key {
 	case "y":
-		if len(m.syncItems) == 0 || m.syncTargetConn < 0 || m.syncTargetConn >= len(m.conns) {
+		if len(m.syncItems) == 0 {
 			m.goTo(screenDashboard)
+			return m, nil
+		}
+		// Fail closed when a connection chosen earlier in the wizard was removed
+		// in the meantime: never write using a re-pointed index.
+		if m.syncTargetConn < 0 || m.syncTargetConn >= len(m.conns) {
+			m.status, m.statusKind = "Sync target is no longer connected", "err"
+			m.syncTargetCursor = 0
+			m.goTo(screenSyncTarget)
+			return m, nil
+		}
+		if !m.syncFromBackup && (m.syncSourceConn < 0 || m.syncSourceConn >= len(m.conns)) {
+			m.status, m.statusKind = "Sync source is no longer connected", "err"
+			m.syncSourceCursor = 0
+			m.goTo(screenSyncSource)
 			return m, nil
 		}
 		// Fail closed: the source client is only the chosen sync source (nil for a
@@ -495,12 +543,21 @@ func (m model) viewConnections(w int) string {
 	}
 	m.recordHit(&b, len(rows))
 	b.WriteString(addLabel + "\n")
+	if m.connRemove >= 0 && m.connRemove < len(rows) {
+		b.WriteString("\n" + m.th.warn.Render("Remove "+rows[m.connRemove].label+"?") + "  " +
+			m.th.danger.Render("[ y ] remove") + "  " + m.th.dim.Render("[ n ] cancel") + "\n")
+	}
 	return b.String()
+}
+
+// syncCrumb renders a sync wizard header with its step indicator.
+func (m model) syncCrumb(title string, step int) string {
+	return m.th.crumb.Render("Sync › "+title) + "  " + m.th.cardLabel.Render(fmt.Sprintf("step %d of 6", step))
 }
 
 func (m model) viewSyncSource(w int) string {
 	var b strings.Builder
-	b.WriteString(m.th.crumb.Render("Sync › source") + "\n\n")
+	b.WriteString(m.syncCrumb("source", 1) + "\n\n")
 	b.WriteString(m.th.dim.Render("Copy policies from…") + "\n\n")
 	for i, c := range m.conns {
 		marker, label := m.rowMarker(i == m.syncSourceCursor, c.DisplayLabel())
@@ -516,7 +573,7 @@ func (m model) viewSyncSource(w int) string {
 
 func (m model) viewSyncSelect(w int) string {
 	var b strings.Builder
-	b.WriteString(m.th.crumb.Render("Sync › select") + "  " + m.th.dim.Render("source: "+m.syncSourceLabel) + "\n")
+	b.WriteString(m.syncCrumb("select", 2) + "  " + m.th.dim.Render("source: "+m.syncSourceLabel) + "\n")
 	b.WriteString(m.th.cardLabel.Render("space = whole type · enter = pick policies · n = choose target") + "\n\n")
 	total := 0
 	start, end := window(m.syncTypeCursor, len(m.syncTypes), 16)
@@ -563,7 +620,7 @@ func (m model) viewSyncPolicies(w int) string {
 		return m.th.dim.Render("…")
 	}
 	st := m.syncTypes[m.syncActiveType]
-	b.WriteString(m.th.crumb.Render("Sync › "+st.pt.Friendly) + "\n\n")
+	b.WriteString(m.syncCrumb(st.pt.Friendly, 3) + m.sortTag() + "\n\n")
 	if st.loading {
 		b.WriteString(m.th.inProg.Render(spinnerFrames[m.frame%len(spinnerFrames)] + " loading policies…"))
 		return b.String()
@@ -577,10 +634,9 @@ func (m model) viewSyncPolicies(w int) string {
 		b.WriteString(m.th.dim.Render("No policies of this type in the source tenant."))
 		return b.String()
 	}
-	visible := syncPolVisible(st.policies, m.filterQuery)
+	visible := syncPolVisible(st.policies, m.filterQuery, m.listSort)
 	b.WriteString(m.filterLine(len(visible), len(st.policies)))
 	if len(visible) == 0 {
-		b.WriteString(m.th.dim.Render("No policies match the filter."))
 		return b.String()
 	}
 	startp, endp := window(filteredPos(m.syncPolCursor, visible), len(visible), 14)
@@ -607,7 +663,7 @@ func (m model) viewSyncPolicies(w int) string {
 
 func (m model) viewSyncTarget(w int) string {
 	var b strings.Builder
-	b.WriteString(m.th.crumb.Render("Sync › target") + "\n\n")
+	b.WriteString(m.syncCrumb("target", 4) + "\n\n")
 	targets := m.targetConns()
 	if len(targets) == 0 {
 		b.WriteString(m.th.warn.Render("No other tenant connected. Add one from Tenants first."))
@@ -625,7 +681,7 @@ func (m model) viewSyncTarget(w int) string {
 
 func (m model) viewSyncNaming(w int) string {
 	var b strings.Builder
-	b.WriteString(m.th.crumb.Render("Sync › naming") + "\n\n")
+	b.WriteString(m.syncCrumb("naming", 5) + "\n\n")
 	opts := []struct{ label, desc string }{
 		{"Keep original name", "Target policy carries the same name as the source."},
 		{"Add prefix " + strings.TrimSpace(syncPrefix), "Copied policies are prefixed so they're easy to spot."},
@@ -641,7 +697,7 @@ func (m model) viewSyncNaming(w int) string {
 
 func (m model) viewSyncConfirm(w int) string {
 	var b strings.Builder
-	b.WriteString(m.th.crumb.Render("Sync › confirm") + "\n\n")
+	b.WriteString(m.syncCrumb("confirm", 6) + "\n\n")
 	target := ""
 	if m.syncTargetConn >= 0 && m.syncTargetConn < len(m.conns) {
 		target = m.conns[m.syncTargetConn].DisplayLabel()

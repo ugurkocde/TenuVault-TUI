@@ -53,6 +53,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.persistConnections()
 		if m.addingConn {
 			m.addingConn = false
+			m.connRemove = -1
 			m.goTo(screenConnections)
 		} else {
 			m.goTo(screenDashboard)
@@ -69,11 +70,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case errMsg:
 		m.err = msg.err
+		m.browseLoading = false
 		m.goTo(screenError)
 		return m, nil
 
 	case backupsLoadedMsg:
 		m.backups = []store.Backup(msg)
+		m.browseLoading = false
 		if len(m.backups) > 0 {
 			b := m.backups[0]
 			m.lastBackup = &b
@@ -150,6 +153,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case syncPoliciesLoadedMsg:
 		m.applySyncPolicies(msg)
+		return m, nil
+
+	case verifyDoneMsg:
+		switch {
+		case msg.err != nil:
+			m.status, m.statusKind = "Verify: "+msg.err.Error(), "warn"
+		case msg.rep.Clean():
+			m.status, m.statusKind = fmt.Sprintf("Verified %d files · backup intact", msg.rep.OK), "ok"
+		default:
+			m.status, m.statusKind = fmt.Sprintf("Integrity check failed: %d mismatched, %d missing, %d extra",
+				len(msg.rep.Mismatched), len(msg.rep.Missing), len(msg.rep.Extra)), "err"
+		}
+		return m, nil
+
+	case exportDoneMsg:
+		if msg.err != nil {
+			m.status, m.statusKind = "Export failed: "+msg.err.Error(), "err"
+		} else {
+			m.status, m.statusKind = "Exported to "+msg.path, "ok"
+		}
 		return m, nil
 
 	case syncEventMsg:
@@ -269,10 +292,7 @@ func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 	case screenSyncConfirm:
 		return m.keySyncConfirm(key)
 	case screenSyncResults:
-		if key == "enter" || key == "esc" || key == "q" {
-			m.goTo(screenDashboard)
-		}
-		return m, nil
+		return m.keySyncResults(key)
 	case screenDiffResult:
 		return m.keyDiffResult(key)
 	case screenRestorePick:
@@ -280,10 +300,7 @@ func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 	case screenRestoreConfirm:
 		return m.keyRestoreConfirm(key)
 	case screenRestoreResult:
-		if key == "enter" || key == "esc" || key == "q" {
-			m.goTo(screenDashboard)
-		}
-		return m, nil
+		return m.keyRestoreResult(key)
 	case screenError:
 		if key == "enter" || key == "esc" {
 			m.err = nil
@@ -353,6 +370,7 @@ func (m model) keyDashboard(key string) (tea.Model, tea.Cmd) {
 		return m.startSync()
 	case "t":
 		m.connCursor = 0
+		m.connRemove = -1
 		m.goTo(screenConnections)
 	case "s":
 		m.settingsCursor = 0
@@ -371,6 +389,7 @@ func (m model) keyDashboard(key string) (tea.Model, tea.Cmd) {
 			return m.startSync()
 		case 5:
 			m.connCursor = 0
+			m.connRemove = -1
 			m.goTo(screenConnections)
 		case 6:
 			m.settingsCursor = 0
@@ -396,6 +415,8 @@ func (m model) openBrowse(mode browseMode, title string) (tea.Model, tea.Cmd) {
 	m.browseTitle = title
 	m.browseCursor = 0
 	m.diffA, m.diffB = nil, nil
+	m.resetFilter()
+	m.browseLoading = true
 	m.goTo(screenBrowse)
 	return m, loadBackups(m.cfg.BackupRoot)
 }
@@ -457,19 +478,24 @@ func (m model) keyBackupSelect(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) keyBrowse(key string) (tea.Model, tea.Cmd) {
+	if m.browseLoading {
+		if key == "esc" || key == "q" {
+			m.goTo(screenDashboard)
+		}
+		return m, nil
+	}
+	visible := m.browseVisible()
 	switch key {
 	case "up", "k":
-		if m.browseCursor > 0 {
-			m.browseCursor--
-		}
+		m.browseCursor = stepFiltered(m.browseCursor, -1, visible)
 	case "down", "j":
-		if m.browseCursor < len(m.backups)-1 {
-			m.browseCursor++
-		}
+		m.browseCursor = stepFiltered(m.browseCursor, 1, visible)
+	case "s":
+		m.listSort = cycleSort(m.listSort)
 	case "esc", "q":
 		m.goTo(screenDashboard)
 	case "enter":
-		if len(m.backups) == 0 {
+		if len(m.backups) == 0 || m.browseCursor >= len(m.backups) {
 			return m, nil
 		}
 		b := m.backups[m.browseCursor]
@@ -522,6 +548,10 @@ func (m model) keyBrowseDetail(key string) (tea.Model, tea.Cmd) {
 		m.goTo(screenBrowse)
 	case "q":
 		m.goTo(screenDashboard)
+	case "v":
+		if m.detail != nil {
+			return m, runVerify(m.detail.Path)
+		}
 	case "r":
 		if m.detail != nil {
 			b := *m.detail
@@ -547,6 +577,8 @@ func (m model) keyCategoryPolicies(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "/":
 		m.filterActive = true
+	case "s":
+		m.listSort = cycleSort(m.listSort)
 	case "up", "k":
 		m.policyCursor = stepFiltered(m.policyCursor, -1, visible)
 	case "down", "j":
@@ -633,7 +665,29 @@ func (m model) keyDiffResult(key string) (tea.Model, tea.Cmd) {
 		if m.diffScroll < len(m.diffChanges)-1 {
 			m.diffScroll++
 		}
+	case "e":
+		return m, exportReport(m.cfg.BackupRoot, "diff", m.diffReport())
 	case "esc", "q":
+		m.goTo(screenDashboard)
+	}
+	return m, nil
+}
+
+func (m model) keyRestoreResult(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "e":
+		return m, exportReport(m.cfg.BackupRoot, "restore", m.restoreReport())
+	case "enter", "esc", "q":
+		m.goTo(screenDashboard)
+	}
+	return m, nil
+}
+
+func (m model) keySyncResults(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "e":
+		return m, exportReport(m.cfg.BackupRoot, "sync", m.syncReport())
+	case "enter", "esc", "q":
 		m.goTo(screenDashboard)
 	}
 	return m, nil
@@ -648,6 +702,8 @@ func (m model) keyRestorePick(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "/":
 		m.filterActive = true
+	case "s":
+		m.listSort = cycleSort(m.listSort)
 	case "up", "k":
 		m.restoreCursor = stepFiltered(m.restoreCursor, -1, visible)
 	case "down", "j":

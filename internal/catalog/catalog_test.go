@@ -46,3 +46,22 @@ func TestByKeyAndDefaults(t *testing.T) {
 		t.Error("deviceConfigurations should be default-selected")
 	}
 }
+
+// TestNoAssignmentsTypes pins the types that have no /assignments navigation
+// (or embed targeting in the policy body); assignment backup skips exactly
+// these.
+func TestNoAssignmentsTypes(t *testing.T) {
+	want := map[string]bool{
+		"roleScopeTags":         true,
+		"deviceCategories":      true,
+		"notificationTemplates": true,
+		"appCategories":         true,
+		"assignmentFilters":     true,
+		"conditionalAccess":     true,
+	}
+	for _, pt := range All() {
+		if pt.NoAssignments != want[pt.Key] {
+			t.Errorf("%s: NoAssignments = %v, want %v", pt.Key, pt.NoAssignments, want[pt.Key])
+		}
+	}
+}

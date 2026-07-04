@@ -359,15 +359,10 @@ func routeByType(category string, raw json.RawMessage) (catalog.PolicyType, bool
 	return match, found
 }
 
+// supportsAssignments defers to the catalog, the single source of truth for
+// per-type capabilities.
 func supportsAssignments(pt catalog.PolicyType) bool {
-	if !strings.HasPrefix(pt.ListPath, "/deviceManagement/") && !strings.HasPrefix(pt.ListPath, "/deviceAppManagement/") {
-		return false
-	}
-	switch pt.Key {
-	case "roleScopeTags", "deviceCategories", "notificationTemplates", "appCategories", "assignmentFilters":
-		return false
-	}
-	return true
+	return !pt.NoAssignments
 }
 
 // embed inserts a sub-resource value array into the policy JSON under key.

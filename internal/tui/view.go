@@ -12,8 +12,11 @@ import (
 )
 
 func (m model) width0() int {
-	if m.width < 30 {
-		return 80
+	if m.width == 0 {
+		return 80 // no WindowSizeMsg yet
+	}
+	if m.width < 40 {
+		return 40 // degrade floor: below this mild wrapping beats a broken layout
 	}
 	return m.width
 }
@@ -41,21 +44,24 @@ func (m model) render() string {
 	case screenBrowse:
 		body, hints = m.viewBrowse(w)
 	case screenBrowseDetail:
-		body, hints = m.viewBrowseDetail(w), "↑/↓ move · enter open · r restore · esc back"
+		body, hints = m.viewBrowseDetail(w), "↑/↓ move · enter open · r restore · v verify · esc back"
 	case screenCategoryPolicies:
-		body, hints = m.viewCategoryPolicies(w), "↑/↓ move · / filter · enter view JSON · esc back"
+		body, hints = m.viewCategoryPolicies(w), "↑/↓ move · / filter · s sort · enter view JSON · esc back"
 	case screenPolicyView:
 		body, hints = m.viewPolicyView(w), "↑/↓ scroll · esc back"
 	case screenSettings:
 		body, hints = m.viewSettings(w), "↑/↓ move · space toggle · ←/→ adjust · esc back"
 	case screenConnections:
 		body, hints = m.viewConnections(w), "↑/↓ move · enter use · a add · x remove · esc back"
+		if m.connRemove >= 0 {
+			hints = "y remove · n cancel"
+		}
 	case screenSyncSource:
 		body, hints = m.viewSyncSource(w), "↑/↓ move · enter pick · esc back"
 	case screenSyncSelect:
 		body, hints = m.viewSyncSelect(w), "space whole type · enter pick policies · n next · esc back"
 	case screenSyncPolicies:
-		body, hints = m.viewSyncPolicies(w), "space toggle · a all · / filter · esc back"
+		body, hints = m.viewSyncPolicies(w), "space toggle · a all · / filter · s sort · esc back"
 	case screenSyncTarget:
 		body, hints = m.viewSyncTarget(w), "↑/↓ move · enter pick target · esc back"
 	case screenSyncNaming:
@@ -63,15 +69,15 @@ func (m model) render() string {
 	case screenSyncConfirm:
 		body, hints = m.viewSyncConfirm(w), "y create · n cancel"
 	case screenSyncResults:
-		body, hints = m.viewSyncResults(w), "enter dashboard"
+		body, hints = m.viewSyncResults(w), "enter dashboard · e export"
 	case screenDiffResult:
-		body, hints = m.viewDiffResult(w), "↑/↓ scroll · esc back"
+		body, hints = m.viewDiffResult(w), "↑/↓ scroll · e export · esc back"
 	case screenRestorePick:
-		body, hints = m.viewRestorePick(w), "space toggle · a all · / filter · enter review · esc back"
+		body, hints = m.viewRestorePick(w), "space toggle · a all · / filter · s sort · enter review · esc back"
 	case screenRestoreConfirm:
 		body, hints = m.viewRestoreConfirm(w), "y confirm · n cancel"
 	case screenRestoreResult:
-		body, hints = m.viewRestoreResult(w), "enter dashboard"
+		body, hints = m.viewRestoreResult(w), "enter dashboard · e export"
 	case screenError:
 		body, hints = m.viewError(w), "enter continue"
 	}
@@ -85,9 +91,9 @@ func (m model) render() string {
 	}
 
 	header := m.header(w)
-	footer := m.th.footer.Render(hints)
+	footer := m.th.footer.Render(fitHints(hints, w))
 	if m.showHelp {
-		footer = m.th.footer.Render("global: ↑/↓ move · enter select · esc back · q quit · ctrl+c force quit · ? help · mouse: click & scroll")
+		footer = m.th.footer.Render(fitHints("global: ↑/↓ move · enter select · esc back · q quit · ctrl+c force quit · ? help · mouse: click & scroll", w))
 	}
 	return header + "\n" + divider(w) + "\n\n" + body + "\n\n" + m.statusLine() + divider(w) + "\n" + footer
 }
@@ -169,7 +175,11 @@ func (m model) viewConnecting() string {
 }
 
 func (m model) viewDashboard(w int) string {
+	stacked := w < 60 // two bordered cards need ~60 cols; stack below that
 	cardW := (w-3)/2 - 2
+	if stacked {
+		cardW = w - 4
+	}
 	if cardW < 20 {
 		cardW = 20
 	}
@@ -194,6 +204,9 @@ func (m model) viewDashboard(w int) string {
 	last := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colGreen).Padding(0, 1).Width(cardW).Render(strings.Join(lastLines, "\n"))
 
 	cards := lipgloss.JoinHorizontal(lipgloss.Top, tenant, " ", last)
+	if stacked {
+		cards = lipgloss.JoinVertical(lipgloss.Left, tenant, last)
+	}
 
 	menu := []struct{ label, key string }{
 		{"Back up now", "b"},
@@ -239,9 +252,6 @@ func (m model) viewBackupSelect(w int) string {
 		}
 	}
 
-	if len(visible) == 0 {
-		b.WriteString(m.th.dim.Render("No categories match the filter.") + "\n")
-	}
 	// Window the long list around the cursor; print group headers inline.
 	start, end := window(filteredPos(m.catCursor, visible), len(visible), 16)
 	lastGroup := ""
@@ -331,17 +341,23 @@ func (m model) viewProgress(w int) (string, string) {
 
 func (m model) viewBrowse(w int) (string, string) {
 	var b strings.Builder
-	b.WriteString(m.th.crumb.Render(m.browseTitle) + "\n")
+	b.WriteString(m.th.crumb.Render(m.browseTitle) + m.sortTag() + "\n")
 	if m.diffA != nil && m.browseMode == modeDiffB {
 		b.WriteString(m.th.dim.Render("baseline: "+m.diffA.Folder) + "\n")
 	}
 	b.WriteString("\n")
+	if m.browseLoading {
+		b.WriteString(m.th.inProg.Render(spinnerFrames[m.frame%len(spinnerFrames)] + " scanning backups…"))
+		return b.String(), "esc back"
+	}
 	if len(m.backups) == 0 {
 		b.WriteString(m.th.dim.Render("No backups yet. Run a backup first."))
 		return b.String(), "esc back"
 	}
-	start, end := window(m.browseCursor, len(m.backups), 12)
-	for i := start; i < end; i++ {
+	visible := m.browseVisible()
+	start, end := window(filteredPos(m.browseCursor, visible), len(visible), 12)
+	for vp := start; vp < end; vp++ {
+		i := visible[vp]
 		bk := m.backups[i]
 		marker := "  "
 		name := m.th.normal.Render(bk.Folder)
@@ -353,10 +369,10 @@ func (m model) viewBrowse(w int) (string, string) {
 		m.recordHit(&b, i)
 		b.WriteString(marker + name + meta + "\n")
 	}
-	if sb := m.scrollbar(start, end, len(m.backups)); sb != "" {
+	if sb := m.scrollbar(start, end, len(visible)); sb != "" {
 		b.WriteString("  " + sb + "\n")
 	}
-	return b.String(), "↑/↓ move · enter select · esc back"
+	return b.String(), "↑/↓ move · s sort · enter select · esc back"
 }
 
 func (m model) viewBrowseDetail(w int) string {
@@ -386,7 +402,7 @@ func (m model) viewBrowseDetail(w int) string {
 
 func (m model) viewCategoryPolicies(w int) string {
 	var b strings.Builder
-	b.WriteString(m.th.crumb.Render("Browse › "+m.catName) + "\n\n")
+	b.WriteString(m.th.crumb.Render("Browse › "+m.catName) + m.sortTag() + "\n\n")
 	if len(m.catPolicies) == 0 {
 		b.WriteString(m.th.dim.Render("No policies in this category."))
 		return b.String()
@@ -394,7 +410,6 @@ func (m model) viewCategoryPolicies(w int) string {
 	visible := m.catPoliciesVisible()
 	b.WriteString(m.filterLine(len(visible), len(m.catPolicies)))
 	if len(visible) == 0 {
-		b.WriteString(m.th.dim.Render("No policies match the filter."))
 		return b.String()
 	}
 	start, end := window(filteredPos(m.policyCursor, visible), len(visible), 14)
@@ -496,10 +511,17 @@ func (m model) viewDiffResult(w int) string {
 func (m model) viewRestorePick(w int) string {
 	var b strings.Builder
 	title := "Restore"
-	if m.restoreBackup != nil {
-		title = "Restore · " + m.restoreBackup.Folder
+	if m.syncMode {
+		title = "Sync · pick policies"
 	}
-	b.WriteString(m.th.crumb.Render(title) + "\n\n")
+	if m.restoreBackup != nil {
+		title += " · " + m.restoreBackup.Folder
+	}
+	crumb := m.th.crumb.Render(title)
+	if m.syncMode {
+		crumb += "  " + m.th.cardLabel.Render("step 3 of 6")
+	}
+	b.WriteString(crumb + m.sortTag() + "\n\n")
 	if len(m.restoreItems) == 0 {
 		b.WriteString(m.th.dim.Render("This backup has no policies."))
 		return b.String()
@@ -513,7 +535,6 @@ func (m model) viewRestorePick(w int) string {
 	visible := m.restoreVisible()
 	b.WriteString(m.filterLine(len(visible), len(m.restoreItems)))
 	if len(visible) == 0 {
-		b.WriteString(m.th.dim.Render("No policies match the filter."))
 		return b.String()
 	}
 	start, end := window(filteredPos(m.restoreCursor, visible), len(visible), 12)
@@ -603,6 +624,22 @@ func (m model) viewError(w int) string {
 }
 
 // --- helpers ---
+
+// fitHints truncates a footer hint line to the render width, dropping whole
+// "·"-separated segments from the end first.
+func fitHints(hints string, w int) string {
+	if lipgloss.Width(hints) <= w {
+		return hints
+	}
+	parts := strings.Split(hints, " · ")
+	for len(parts) > 1 {
+		parts = parts[:len(parts)-1]
+		if joined := strings.Join(parts, " · "); lipgloss.Width(joined) <= w {
+			return joined
+		}
+	}
+	return trunc(parts[0], w-1)
+}
 
 func spread(left, right string, width int) string {
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)

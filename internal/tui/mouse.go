@@ -74,6 +74,14 @@ func (m model) handleMouse(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 				// handled as navigation, not typed into the query.
 				m.filterActive = false
 				m.setListCursor(r.index)
+				// A pending removal confirmation is keyboard-only (y/n): a click
+				// dismisses it and moves the cursor, but never fires the row
+				// action — a stray click must not confirm a destructive removal
+				// or get silently swallowed as a fake keypress.
+				if m.screen == screenConnections && m.connRemove >= 0 {
+					m.connRemove = -1
+					return m, nil, true
+				}
 				if a := m.hits.action; a != "" {
 					mm, cmd := m.handleKey(a)
 					return mm, cmd, true

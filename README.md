@@ -59,8 +59,12 @@ Built with Go and the [Charm](https://charm.land) stack (Bubble Tea, Lip Gloss).
   overwrites existing policies.
 - **Signed and notarized.** macOS builds are Developer ID-signed and Apple-
   notarized; install via Homebrew, `.pkg`, `.dmg`, or a raw binary.
-- **Scriptable.** `backup`, `restore`, and `compare` subcommands run headless
-  for CI and scheduling. Mouse, scrollbars, and keyboard navigation throughout.
+- **Scriptable.** `backup`, `restore`, `compare`, `verify`, and `sync`
+  subcommands run headless for CI and scheduling. Mouse, scrollbars, and
+  keyboard navigation throughout.
+- **Verifiable backups.** Every backup records a SHA-256 checksum per policy
+  file; `tenuvault verify` (or `v` in the TUI) detects corrupted or tampered
+  backups.
 
 ## Install
 
@@ -123,9 +127,12 @@ Flags:
 
 Keys: `b` back up, `l` browse, `d` compare, `r` restore, `y` sync, `t` tenants,
 `s` settings, arrow keys / `j` `k` to move, `space` to toggle, `/` to filter
-long lists, `enter` to select, `esc` to go back, `q` to quit, `?` for help.
-While a backup is running, `x` cancels it and keeps what was already written.
-The mouse works too — click a list row to select it and scroll with the wheel.
+long lists, `s` to sort them by name, `enter` to select, `esc` to go back, `q`
+to quit, `?` for help. On the compare and restore/sync result screens, `e`
+exports the details as a JSON report into the backup root. On a backup's
+detail screen, `v` verifies its files against the recorded checksums. While a
+backup is running, `x` cancels it and keeps what was already written. The
+mouse works too — click a list row to select it and scroll with the wheel.
 
 ## Coverage
 
@@ -145,9 +152,10 @@ best-effort (default/singleton configs can't be recreated).
 
 ## Headless (automation / CI)
 
-`backup`, `restore`, and `compare` run without the TUI for scheduling and
-pipelines. `backup` and `restore` use app-registration credentials (interactive
-sign-in needs a browser); `compare` works entirely offline:
+`backup`, `restore`, `compare`, `verify`, and `sync` run without the TUI for
+scheduling and pipelines. Commands that talk to a tenant use app-registration
+credentials (interactive sign-in needs a browser); `compare` and `verify` work
+entirely offline:
 
 ```sh
 export AZURE_TENANT_ID=...   AZURE_CLIENT_ID=...   AZURE_CLIENT_SECRET=...
@@ -156,13 +164,35 @@ tenuvault backup --out ./backups --assignments
 tenuvault backup --categories deviceConfigurations,compliancePolicies
 tenuvault restore --backup ./backups/backup-2026-06-27-020000 --prefix "[Restored] "
 tenuvault compare ./backups/backup-2026-06-26-020000 ./backups/backup-2026-06-27-020000
+tenuvault verify ./backups/backup-2026-06-27-020000
 ```
 
 `backup` exits non-zero if a backup fails; `restore` exits non-zero if any policy
 fails to create. `compare` prints one change per line and exits `0` when the
 backups match, `1` when drift is found, and `2` on a usage or read error, so a
-nightly job can gate on configuration drift. Tenant-to-tenant sync remains
-interactive (it needs two tenants).
+nightly job can gate on configuration drift. `verify` re-hashes every policy
+file against the `checksums.json` the backup recorded and exits `0` when intact,
+`1` on any mismatch/missing/extra file, and `2` when the backup has no checksums
+(written by an older version) or cannot be read.
+
+`sync` copies policies into the target tenant (the `AZURE_*` credentials, same
+as `restore`). The source is either a saved backup or a second, live tenant
+supplied via `TENUVAULT_SOURCE_*` variables:
+
+```sh
+# from a saved backup
+tenuvault sync --from-backup ./backups/backup-2026-06-27-020000 --prefix "[Synced] "
+
+# from a live tenant (dev -> prod promotion)
+export TENUVAULT_SOURCE_TENANT_ID=... TENUVAULT_SOURCE_CLIENT_ID=... TENUVAULT_SOURCE_CLIENT_SECRET=...
+tenuvault sync --categories deviceConfigurations --names "Baseline BitLocker" --dry-run
+tenuvault sync --categories deviceConfigurations --names "Baseline BitLocker"
+```
+
+`--dry-run` prints what would be created and writes nothing. `--names` narrows
+the selection to exact display names within the chosen categories. Syncing a
+backup into the tenant it came from is refused unless a `--prefix` is set (it
+would silently duplicate policies under their original names).
 
 ## Tenant sync
 
@@ -174,7 +204,9 @@ keep the original name or add a prefix, and confirm.
 
 Sync is **create-only and never overwrites**: it only creates new policies in the
 target and never reads or modifies existing ones. Conditional Access arrives
-disabled, and assignments are not copied (group ids differ between tenants). The
+disabled, and assignments are not copied (group ids differ between tenants);
+with `--assignments`, backups still record them read-only, along with a
+`groups.json` mapping group ids to display names for auditing. The
 target sign-in needs write scopes (`DeviceManagement*.ReadWrite.All`). Tenant
 connections are remembered across launches (metadata only — no tokens or secrets
 are stored).
@@ -193,6 +225,9 @@ are:
 - `DeviceManagementScripts.ReadWrite.All`
 - `DeviceManagementRBAC.ReadWrite.All` (scope tags)
 - `Policy.ReadWrite.ConditionalAccess`
+- `Group.Read.All` (optional in effect: only used to label assignment group ids
+  with display names in `groups.json`; backups succeed without it and keep the
+  raw ids)
 
 If a scope is missing, the affected category is reported as failed on the backup
 summary with the exact Graph error, so you can see what to consent.
@@ -209,6 +244,11 @@ Credentials are never written to disk — secrets are read from the environment:
 | `AZURE_CLIENT_ID`                   | Custom app registration (optional)  |
 | `AZURE_CLIENT_SECRET`               | Client secret (enables secret auth) |
 | `AZURE_CLIENT_CERTIFICATE_PASSWORD` | Certificate password (if encrypted) |
+| `TENUVAULT_SOURCE_TENANT_ID`        | Live source tenant for headless `sync` |
+| `TENUVAULT_SOURCE_CLIENT_ID`        | Source app registration for `sync`  |
+| `TENUVAULT_SOURCE_CLIENT_SECRET`    | Source client secret for `sync`     |
+| `TENUVAULT_SOURCE_CERT_PATH`        | Source certificate for `sync` (alternative to the secret) |
+| `TENUVAULT_SOURCE_CERT_PASSWORD`    | Source certificate password         |
 
 ## Security
 
@@ -226,6 +266,8 @@ Credentials are never written to disk — secrets are read from the environment:
 ```
 backup-YYYY-MM-DD-HHMMSS/
   metadata.json
+  checksums.json                       # sha256 per policy file (tenuvault verify)
+  groups.json                          # assignment group id -> name (with --assignments)
   DeviceConfigurations/<policy name>.json
   CompliancePolicies/<policy name>.json
   ConfigurationPolicies/<policy name>.json

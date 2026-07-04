@@ -121,6 +121,7 @@ type model struct {
 	// visible items by name; the list cursors keep original item indexes.
 	filterActive bool
 	filterQuery  string
+	listSort     sortMode // display order of the current list screen
 
 	// connections
 	conns      []connection.Connection
@@ -129,6 +130,7 @@ type model struct {
 	addingConn bool
 	connCursor int
 	connGen    int // generation guard for stale connect results after esc
+	connRemove int // row with a pending remove confirmation; -1 = none
 
 	// runCancel aborts the in-flight backup/restore/sync operation without
 	// tearing down the whole app context. Nil when nothing is running.
@@ -164,10 +166,11 @@ type model struct {
 	restoreRunning bool
 
 	// browse
-	backups      []store.Backup
-	browseCursor int
-	browseMode   browseMode
-	browseTitle  string
+	backups       []store.Backup
+	browseCursor  int
+	browseMode    browseMode
+	browseTitle   string
+	browseLoading bool // a backup-dir scan is in flight; don't render stale rows
 
 	// detail
 	detail       *store.Backup
@@ -248,12 +251,13 @@ func New(cfg config.Config) model {
 		}
 	}
 	return model{
-		cfg:    cfg,
-		ctx:    ctx,
-		cancel: cancel,
-		ch:     make(chan tea.Msg, 64),
-		th:     newTheme(),
-		screen: start,
+		cfg:        cfg,
+		ctx:        ctx,
+		cancel:     cancel,
+		ch:         make(chan tea.Msg, 64),
+		th:         newTheme(),
+		screen:     start,
+		connRemove: -1,
 		authOptions: []authOption{
 			{"Interactive sign-in", "Opens your browser. Delegated; no app registration needed.", config.AuthInteractive},
 			{"App registration · client secret", "Tenant id, client id, and a client secret.", config.AuthSecret},

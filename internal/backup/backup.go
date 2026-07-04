@@ -8,6 +8,8 @@ package backup
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -85,7 +87,12 @@ func Run(ctx context.Context, c graph.API, types []catalog.PolicyType, opts Opti
 	}
 
 	counts := map[string]int{}
+	checksums := map[string]string{}
 	catResults := map[string]*CategoryResult{}
+	var resolver *groupResolver
+	if opts.IncludeAssignments {
+		resolver = newGroupResolver(c)
+	}
 	var order []string
 	emit := func(e Event) {
 		if progress != nil {
@@ -153,6 +160,11 @@ loop:
 					if ctx.Err() != nil {
 						continue
 					}
+					if resolver != nil {
+						for _, gid := range assignmentGroupIDs(full) {
+							resolver.resolve(ctx, gid)
+						}
+					}
 					name := jsonutil.DisplayName(full, pt.NameField)
 					mu.Lock()
 					done++
@@ -160,7 +172,8 @@ loop:
 						cr.Warnings++
 						emit(Event{Category: pt.Category, Friendly: pt.Friendly, Err: fmt.Errorf("incomplete detail"), Current: done, Total: total})
 					}
-					if err := writePolicy(catDir, name, full); err != nil {
+					relName, sum, err := writePolicy(catDir, name, full)
+					if err != nil {
 						// A failed disk write is data loss for this policy; record the
 						// cause so the log can distinguish it from partial Graph detail.
 						cr.Warnings++
@@ -171,6 +184,7 @@ loop:
 						mu.Unlock()
 						continue
 					}
+					checksums[pt.Category+"/"+relName] = sum
 					counts[pt.Category]++
 					cr.Count++
 					emit(Event{Category: pt.Category, Friendly: pt.Friendly, Current: done, Total: total})
@@ -238,24 +252,45 @@ loop:
 	if err := writeMetadata(path, meta); err != nil {
 		return Result{}, err
 	}
-	writeLog(path, meta, catList)
+	// Partial (cancelled) backups get partial checksums: everything kept on
+	// disk stays verifiable.
+	if err := store.WriteChecksums(path, checksums); err != nil {
+		return Result{}, err
+	}
+	var notes []string
+	if resolver != nil {
+		if names := resolver.resolved(); len(names) > 0 {
+			writeGroups(path, names)
+		}
+		if resolver.wasDisabled() {
+			notes = append(notes, "group names unavailable: Group.Read.All not granted (assignments keep raw ids)")
+		}
+	}
+	writeLog(path, meta, catList, notes)
 
 	return Result{Folder: folder, Path: path, Status: status, ItemCounts: counts, Categories: catList}, nil
 }
 
 var noiseKeys = map[string]bool{"@odata.context": true}
 
-func writePolicy(dir, name string, raw json.RawMessage) error {
+// writePolicy writes one policy and returns the file name it ended up under
+// (uniquePath may have added a " (2)" suffix) plus the sha256 of the exact
+// bytes written, for the integrity sidecar.
+func writePolicy(dir, name string, raw json.RawMessage) (string, string, error) {
 	cleaned, err := jsonutil.Normalize(raw, noiseKeys)
 	if err != nil {
 		cleaned = raw
 	}
 	data, err := json.MarshalIndent(cleaned, "", "  ")
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	file := uniquePath(filepath.Join(dir, jsonutil.SanitizeFilename(name)+".json"))
-	return os.WriteFile(file, data, 0o644)
+	if err := os.WriteFile(file, data, 0o644); err != nil {
+		return "", "", err
+	}
+	sum := sha256.Sum256(data)
+	return filepath.Base(file), hex.EncodeToString(sum[:]), nil
 }
 
 func writeMetadata(dir string, m store.Metadata) error {
@@ -266,8 +301,19 @@ func writeMetadata(dir string, m store.Metadata) error {
 	return os.WriteFile(filepath.Join(dir, "metadata.json"), data, 0o644)
 }
 
+// writeGroups records the assignment group id -> display name map next to the
+// manifest, so drift reports and audits can label group ids without a live
+// directory lookup. Root-level sidecar: category folders stay policy-only.
+func writeGroups(dir string, names map[string]string) {
+	data, err := json.MarshalIndent(names, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(dir, "groups.json"), data, 0o644)
+}
+
 // writeLog records a human-readable per-category outcome next to the backup.
-func writeLog(dir string, m store.Metadata, cats []CategoryResult) {
+func writeLog(dir string, m store.Metadata, cats []CategoryResult, notes []string) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "TenuVault backup %s\n", m.BackupFolder)
 	fmt.Fprintf(&b, "tenant: %s (%s)\n", m.TenantName, m.TenantID)
@@ -285,6 +331,9 @@ func writeLog(dir string, m store.Metadata, cats []CategoryResult) {
 		default:
 			fmt.Fprintf(&b, "ok       %-32s %d saved\n", c.Category, c.Count)
 		}
+	}
+	for _, n := range notes {
+		fmt.Fprintf(&b, "note     %s\n", n)
 	}
 	_ = os.WriteFile(filepath.Join(dir, "backup.log"), []byte(b.String()), 0o644)
 }

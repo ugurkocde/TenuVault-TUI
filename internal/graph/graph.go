@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
@@ -117,10 +118,66 @@ func (c *Client) do(ctx context.Context, method, fullURL string, body []byte) ([
 			continue
 		}
 		if resp.StatusCode >= 400 {
-			return data, resp.StatusCode, fmt.Errorf("graph %s %s: %d: %s", method, fullURL, resp.StatusCode, string(data))
+			return data, resp.StatusCode, &StatusError{
+				Code:   resp.StatusCode,
+				Method: method,
+				Path:   req.URL.Path,
+				Detail: apiError(resp.StatusCode, data),
+			}
 		}
 		return data, resp.StatusCode, nil
 	}
+}
+
+// StatusError is returned for non-2xx Graph responses. Code carries the HTTP
+// status so callers can react to specific failures (e.g. a 403 on an optional
+// scope) without parsing the message.
+type StatusError struct {
+	Code   int
+	Method string
+	Path   string
+	Detail string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("graph %s %s: %s", e.Method, e.Path, e.Detail)
+}
+
+// oDataError is the standard Graph error envelope.
+type oDataError struct {
+	Error struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// apiError condenses a Graph error body to "code: message" so the UI shows a
+// readable line instead of a raw JSON blob. Bodies that are not the standard
+// OData error shape fall back to the HTTP status plus a short excerpt.
+func apiError(status int, body []byte) string {
+	var oe oDataError
+	if json.Unmarshal(body, &oe) == nil && (oe.Error.Code != "" || oe.Error.Message != "") {
+		// Graph messages sometimes embed request ids and stack detail on
+		// following lines; keep only the first.
+		msg, _, _ := strings.Cut(oe.Error.Message, "\n")
+		msg = strings.TrimSpace(msg)
+		switch {
+		case msg == "":
+			return oe.Error.Code
+		case oe.Error.Code == "":
+			return msg
+		default:
+			return oe.Error.Code + ": " + msg
+		}
+	}
+	out := fmt.Sprintf("HTTP %d %s", status, http.StatusText(status))
+	if excerpt := strings.TrimSpace(string(body)); excerpt != "" {
+		if r := []rune(excerpt); len(r) > 120 {
+			excerpt = string(r[:120]) + "..."
+		}
+		out += ": " + excerpt
+	}
+	return out
 }
 
 // retryableStatus reports whether Graph signalled a transient condition worth

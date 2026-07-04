@@ -4,7 +4,10 @@
 package store
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -114,6 +117,99 @@ func (b Backup) Policies(category string) ([]PolicyFile, error) {
 // Read returns the raw JSON of a policy file.
 func Read(path string) (json.RawMessage, error) {
 	return os.ReadFile(path)
+}
+
+// ChecksumsFile is the integrity sidecar written next to metadata.json. It is
+// deliberately not part of metadata.json: the manifest matches the TenuVault
+// portal runbook shape and stays untouched, and backups from older versions
+// simply lack the sidecar.
+const ChecksumsFile = "checksums.json"
+
+// Checksums records the hash of every policy file written by a backup, keyed
+// by "Category/File.json" (forward slashes on every platform).
+type Checksums struct {
+	Algorithm string            `json:"algorithm"`
+	Files     map[string]string `json:"files"`
+}
+
+// WriteChecksums writes the integrity sidecar into a backup folder.
+func WriteChecksums(dir string, files map[string]string) error {
+	if files == nil {
+		files = map[string]string{}
+	}
+	data, err := json.MarshalIndent(Checksums{Algorithm: "sha256", Files: files}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, ChecksumsFile), data, 0o644)
+}
+
+// ReadChecksums loads the integrity sidecar of a backup folder.
+func ReadChecksums(dir string) (Checksums, error) {
+	var c Checksums
+	data, err := os.ReadFile(filepath.Join(dir, ChecksumsFile))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return c, fmt.Errorf("no checksums recorded (backup predates integrity support)")
+		}
+		return c, err
+	}
+	if err := json.Unmarshal(data, &c); err != nil {
+		return c, fmt.Errorf("decode %s: %w", ChecksumsFile, err)
+	}
+	return c, nil
+}
+
+// VerifyReport is the outcome of an integrity check.
+type VerifyReport struct {
+	OK         int
+	Mismatched []string // recorded hash differs from the file on disk
+	Missing    []string // recorded but absent on disk
+	Extra      []string // policy file on disk that was never recorded
+}
+
+// Clean reports whether the backup matches its recorded checksums exactly.
+func (r VerifyReport) Clean() bool {
+	return len(r.Mismatched) == 0 && len(r.Missing) == 0 && len(r.Extra) == 0
+}
+
+// Verify re-hashes every policy file in a backup folder against its recorded
+// checksum and flags files that appeared after the backup was written.
+func Verify(dir string) (VerifyReport, error) {
+	c, err := ReadChecksums(dir)
+	if err != nil {
+		return VerifyReport{}, err
+	}
+	var rep VerifyReport
+	for rel, want := range c.Files {
+		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil {
+			rep.Missing = append(rep.Missing, rel)
+			continue
+		}
+		sum := sha256.Sum256(data)
+		if hex.EncodeToString(sum[:]) != want {
+			rep.Mismatched = append(rep.Mismatched, rel)
+			continue
+		}
+		rep.OK++
+	}
+	// A policy file on disk that was never recorded means the backup was
+	// altered after it was written.
+	b := Backup{Path: dir}
+	cats, _ := b.Categories()
+	for _, cat := range cats {
+		files, _ := b.Policies(cat)
+		for _, f := range files {
+			if _, ok := c.Files[cat+"/"+f.Name+".json"]; !ok {
+				rep.Extra = append(rep.Extra, cat+"/"+f.Name+".json")
+			}
+		}
+	}
+	sort.Strings(rep.Mismatched)
+	sort.Strings(rep.Missing)
+	sort.Strings(rep.Extra)
+	return rep, nil
 }
 
 // Cleanup removes backup folders older than the given number of days, based on

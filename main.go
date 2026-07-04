@@ -25,6 +25,10 @@ func main() {
 			os.Exit(cli.Restore(os.Args[2:]))
 		case "compare":
 			os.Exit(cli.Compare(os.Args[2:]))
+		case "verify":
+			os.Exit(cli.Verify(os.Args[2:]))
+		case "sync":
+			os.Exit(cli.Sync(os.Args[2:]))
 		}
 	}
 

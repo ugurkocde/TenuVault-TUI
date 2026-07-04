@@ -1,105 +1,143 @@
-# Full codebase review and improvement pass
+# v1.4.0 improvement batch
 
-Goal: completely review the codebase and all TUI pages, fix bugs, improve what
-exists, and add features that make TenuVault-TUI top-notch.
+Selected from the post-v1.3.0 backlog: all quick wins, all UI/layout items, all
+functionality items. Code health work (file splits, TUI flow test suite,
+Windows signing) deferred by choice. Previous v1.3.0 pass is recorded in git
+history (todo.md at 92ee261).
 
-## Plan
+## TUI/UX batch
 
-- [x] Baseline: build, vet, tests (all green at d3246ad)
-- [x] Parallel deep review by area:
-  - [x] internal/tui (all pages: dashboard, backup, restore, compare, sync, auth form, connections)
-  - [x] internal/graph, auth, connection, config, store (Graph client, auth flows, secret handling)
-  - [x] internal/backup, restore, syncer, policyops, diff, catalog, jsonutil, cli (core operations)
-- [x] Triage findings: fix confirmed bugs first, then high-value improvements
-- [x] Add features that raise product quality (cancel running ops, sync load retry, paste, compare CLI)
-- [x] Verify: build + vet + full test suite green, new behavior covered by tests
-- [x] Independent evaluation by a separate code-reviewer agent
-- [x] Document results in this file
+- [x] T2 Graph error formatting: parse OData error body in graph.do(), typed
+      StatusError, "code: message" with "HTTP n status" fallback + excerpt
+- [x] T1 Connection removal confirm: y/n prompt before removal; shift or
+      invalidate syncSourceConn/syncTargetConn; fail-closed check at sync confirm
+- [x] T5 Empty-filter hint: filterLine shows no-matches hint with esc-to-clear
+- [x] T6 Browse loading spinner: browseLoading flag, spinner line, enter ignored
+      while loading, cleared on backupsLoadedMsg/errMsg
+- [x] T3 List sorting: s cycles default/name on browse, category policies, sync
+      policies, restore pick; sort reorders post-filter visible slice only;
+      reset on screen entry via resetFilter
+- [x] T8 Sync step breadcrumb: "step N of 6" on the six sync wizard screens and
+      on shared pick screens when in sync mode
+- [x] T4 Export results: e writes timestamped JSON report (diff / restore /
+      sync results) under backup root, transient "Exported to <path>" status
+- [x] T7 Narrow terminals: width0 floor 40, dashboard stacks below 60 cols,
+      footer hints truncated to width; width-sweep render test
 
-## Fixed bugs
+## Backend batch
 
-1. Graph client only retried 429; now also retries 503/504 with Retry-After
-   (capped), plus bounded transport-error retries for GET only (POST/PATCH are
-   never retried on transport errors to avoid double-creating policies).
-2. /organization smoke test moved from beta to v1.0 (verified live via Lokka:
-   GET /v1.0/organization?$select=id,displayName,verifiedDomains returns the
-   exact shape the code parses).
-3. SanitizeFilename and condense() truncated on byte boundaries and could split
-   multi-byte UTF-8 runes (umlauts/CJK policy names); now rune-safe. trunc() in
-   the TUI likewise.
-4. Backup disk-write failures were silently counted as generic warnings; now
-   recorded in the category error, written to backup.log, and emitted as events.
-5. "?" was globally intercepted for help and could not be typed into the client
-   secret field.
-6. No paste support in the auth form; bracketed paste now inserts into the
-   focused field (control characters stripped).
-7. syncMode leaked from an abandoned sync flow into restore started from browse
-   detail, silently rerouting restore into the sync target picker.
-8. Removing a connection listed before the active source silently switched the
-   active source tenant (sourceIdx not decremented).
-9. Sync policy load errors were swallowed and shown as "No policies of this
-   type in the source tenant"; now surfaced with a retry ('r' or reopen).
-10. Connect results arriving after the user pressed esc on the connecting
-    screen yanked them to the dashboard/error screen; now generation-guarded.
+- [x] T10 Parallel creates: 4-worker indexed pool in syncer.Run (pattern from
+      backup.Run); restore.Restore becomes an adapter over syncer.Run;
+      per-item multi-step creates stay sequential inside policyops.Create
+- [x] T11 Checksums: sidecar checksums.json (sha256, category-relative paths,
+      real deduped filenames); store.Verify; headless `verify <dir>` subcommand
+      (exit 0/1/2); optional v key on browse detail
+- [x] T12 Headless `sync` subcommand: --from-backup | TENUVAULT_SOURCE_* env
+      live source, --categories, --names, --prefix, --dry-run; target creds =
+      AZURE_* like restore; refuse same-tenant sync without prefix
+- [x] T13 Assignment group names: catalog NoAssignments flag replaces
+      supportsAssignments list; groupResolver (cached, 403-degrades) in backup;
+      backup-level groups.json sidecar; Group.Read.All added to delegated scopes
 
-## Features added
+## Acceptance criteria (contract for evaluation)
 
-- Cancel a running backup (x/esc) without quitting; cancelled backups keep what
-  was written and finalize metadata with Status "Cancelled" instead of leaving
-  an orphaned folder without a manifest. x also cancels running restore/sync.
-- Headless `tenuvault compare <older> <newer>` subcommand for CI drift gates
-  (exit 0 no drift, 1 drift, 2 error). README updated.
-- Retention days bounded at 3650; esc from connections screen when not
-  connected returns to sign-in; long tenant names truncated in the header.
+### T2
+- 403 with OData body surfaces "Authorization_RequestDenied: Insufficient
+  privileges..." not raw JSON; non-JSON body surfaces "HTTP 500 Internal Server
+  Error" plus short excerpt; 429/503/504 retry behavior unchanged
+- StatusError carries the HTTP code for errors.As callers
 
-## Acceptance criteria
+### T1
+- x arms a confirm prompt; y removes (config + conns persisted); n/esc/any
+  other key cancels with no change; x on the add-tenant row does nothing
+- Removing a connection before the sync source/target index shifts it; removing
+  the selected one sets -1; sync confirm y with stale source/target refuses
+  with an error status instead of running
 
-1. go build ./..., go vet ./..., go test ./... all pass
-2. Every confirmed bug found in review is fixed or explicitly documented as deferred
-3. At least the top improvement/feature items are implemented with tests where testable
-4. Any Graph API endpoint/payload change is verified against Graph docs (msgraph skill) before shipping
-5. A separate code-reviewer agent signs off on the final diff with no high-severity findings
+### T5
+- Zero-match filter renders: no matches for "query" (esc to clear); gone when
+  matches exist
 
-## Review section
+### T6
+- Entering browse shows animated scanning line until load lands; stale rows
+  never render; enter ignored while loading; errMsg clears the flag
 
-Acceptance criteria results (2026-07-01):
+### T3
+- s toggles name-asc/default on all four screens with a visible sort indicator
+- Composes with / filter; selections and mouse hits stay on the same items
+- s typed while filter input is active goes into the query, not the sort
+- Browse default order stays newest-first
 
-1. go build ./..., go vet ./..., go test ./... all pass; gofmt clean; go test
-   -race clean on tui/graph/backup. PASS
-2. All 10 confirmed review bugs fixed (see "Fixed bugs" above); no findings
-   deferred. Reviewer improvement ideas deliberately not done in this pass:
-   "/" list filter and concurrent per-item backup fetches (both offered as
-   spin-off tasks), backup checksums/resume, dashboard warning indicator.
-3. Features implemented with tests where testable: run cancellation
-   (TestRunCancelledKeepsPartialBackup), retry logic (3 graph client tests),
-   rune-safe filenames (TestSanitizeFilenameRuneBoundary), sourceIdx fix
-   (TestRemoveEarlierTenantKeepsSource), syncMode reset
-   (TestRestoreFromBrowseDetailClearsSyncMode). PASS
-4. Graph change (/organization beta -> v1.0) verified end-to-end live via
-   Lokka MCP against tenant ffc10f05: response shape matches the parser. PASS
-5. Independent feature-dev:code-reviewer evaluation of the full diff:
-   verdict PASS, zero high or medium severity findings. It traced the
-   generation guards, run/ui context split, cancellation-to-metadata path,
-   retry bounds, and value-receiver mutation semantics. PASS
+### T8
+- Six sync screens show correct step N of 6; shared pick screens only in sync
+  mode; non-sync flows show no step text
 
-Changes are uncommitted in the working tree (16 files, +421/-56), ready for
-review and commit.
+### T4
+- e on diff/restore/sync result screens writes valid timestamped JSON under the
+  backup root and shows Exported-to status; failed items carry error text; sync
+  partial-content flagged; unwritable root produces an error status, no file
 
-## Integration for v1.3.0 (2026-07-01)
+### T7
+- Every screen renders without panic at width 40; dashboard stacks below 60;
+  footer line never exceeds render width; width under 30 yields 40-col output
 
-Branch integrate/v1.3.0 combines, on top of origin/main (8922040):
+### T10
+- Concurrency observed (max in-flight between 2 and 4) on 8+ items; results in
+  input order; cancel mid-run loses no results (unstarted items get
+  context.Canceled); multi-part group policy child POST always after its create
+- Existing restore package tests pass unchanged
 
-1. This session's bug fixes and features (rebased; conflicts resolved in
-   internal/tui/commands.go and internal/graph/graph_test.go - the three
-   retry tests were rewritten in upstream's roundTripFunc test style).
-2. Backup parallelization from the spin-off task (4-worker pool per
-   category), reconciled with the write-error recording and the
-   keep-partial-and-finalize-Cancelled cancellation semantics. The old
-   TestRunStopsOnCancellation assertion (context.Canceled error) was updated
-   to the merged behavior (nil error, Status Cancelled, manifest present).
-3. The "/" list filter from the spin-off task, reconciled with the sync
-   load-error retry key, the auth-form "?" fix, and the browse-detail
-   restore syncMode reset.
+### T11
+- checksums.json hashes match a re-hash of every written file including
+  dedup-renamed ones; verify distinguishes ok/mismatch/missing/extra/no-file;
+  CLI exit codes 0/1/2 covered by tests
 
-Verification: gofmt clean, go build, go vet, go test -race ./... all green,
-golangci-lint (same config CI uses) reports 0 issues.
+### T12
+- Dry-run from backup dir prints planned items, exits 0, makes zero network
+  calls; --names filters; missing source spec exits 2; README documents env vars
+
+### T13
+- groups.json written with cached single fetch per group id; 403 on /groups
+  degrades: backup still succeeds, one warning line in backup.log, raw IDs kept
+- The 6 no-assignment types pinned by a test; restore/sync never POST
+  assignments (existing tests stay green)
+
+### Whole batch
+- gofmt clean; go vet clean; go test -race ./... green; golangci-lint 0 issues
+- Independent code-reviewer agent evaluation against these criteria: PASS
+- README updated for: sorting/export/verify/sync keys and subcommands, env
+  vars, Group.Read.All scope note
+
+## Review
+
+Acceptance criteria results (2026-07-02):
+
+1. All 12 features implemented and individually tested (see per-task criteria
+   above); every criterion verified by the independent reviewer. PASS
+2. gofmt clean, go vet clean, go test -race ./... green (11 packages),
+   golangci-lint 0 issues. PASS
+3. Independent feature-dev:code-reviewer evaluation of the full diff: first
+   pass found one high-confidence regression (a mouse click on the Tenants
+   screen while a removal confirmation was pending was swallowed as a fake
+   keypress and could neither be a deliberate confirm nor a clean cancel).
+   Fixed in mouse.go (click during pending confirm = dismiss + move cursor,
+   never fires the row action) with regression test
+   TestMouseClickDuringRemoveConfirm. Re-review verdict: PASS, no remaining
+   high-confidence issues.
+4. README updated: sort/export/verify keys, verify and sync subcommands with
+   examples, TENUVAULT_SOURCE_* env vars, Group.Read.All scope note, backup
+   format (checksums.json, groups.json). PASS
+
+Notes:
+- New tests added: 21 (graph error formatting, removal confirm incl. mouse,
+  sort/filter composition, empty-filter hint, browse loading, breadcrumbs,
+  exports, narrow-width sweep, syncer pool concurrency/order/cancel/multi-part,
+  checksums round-trip, store verify matrix, CLI verify/sync exit codes,
+  group resolver cache + 403 degrade, NoAssignments pin).
+- Live-tenant verification of the new Graph call (GET /v1.0/groups/{id}
+  ?$select=displayName) was not run this session; the endpoint shape matches
+  the documented v1.0 groups API and degrades safely on 403/404. Suggested
+  before release: one --assignments backup against the lab tenant.
+
+Changes are uncommitted in the working tree (30 files, +2000/-290 approx),
+ready for review and commit.

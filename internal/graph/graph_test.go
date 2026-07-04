@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -120,22 +121,46 @@ func TestDoRetriesOn429(t *testing.T) {
 
 func TestDoReturnsErrorOnHTTPError(t *testing.T) {
 	c, _ := testClient(roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return resp(http.StatusBadRequest, `{"error":{"message":"bad"}}`, nil), nil
+		return resp(http.StatusBadRequest, `{"error":{"code":"BadRequest","message":"bad"}}`, nil), nil
 	}))
 
 	data, err := c.Get(context.Background(), "beta", "/me", nil)
 	if err == nil {
 		t.Fatal("expected an error for a 400 response")
 	}
-	if !strings.Contains(err.Error(), "400") {
-		t.Errorf("error should include the status code: %v", err)
+	if got := err.Error(); got != "graph GET /beta/me: BadRequest: bad" {
+		t.Errorf("error = %q, want the condensed OData message", got)
 	}
-	if !strings.Contains(err.Error(), "bad") {
-		t.Errorf("error should include the response body: %v", err)
+	var se *StatusError
+	if !errors.As(err, &se) || se.Code != http.StatusBadRequest {
+		t.Errorf("error should be a StatusError carrying 400, got %#v", err)
 	}
 	// The raw body is still returned alongside the error for callers that want it.
 	if !strings.Contains(string(data), "bad") {
 		t.Errorf("body = %s", data)
+	}
+}
+
+func TestAPIErrorParsesODataBody(t *testing.T) {
+	body := `{"error":{"code":"Authorization_RequestDenied","message":"Insufficient privileges to complete the operation.\nRequest id: 123"}}`
+	got := apiError(http.StatusForbidden, []byte(body))
+	want := "Authorization_RequestDenied: Insufficient privileges to complete the operation."
+	if got != want {
+		t.Errorf("apiError = %q, want %q", got, want)
+	}
+}
+
+func TestAPIErrorFallsBackToStatus(t *testing.T) {
+	got := apiError(http.StatusInternalServerError, []byte("<html>oops</html>"))
+	if !strings.HasPrefix(got, "HTTP 500 Internal Server Error") || !strings.Contains(got, "<html>oops</html>") {
+		t.Errorf("apiError = %q, want status text plus excerpt", got)
+	}
+	if got := apiError(http.StatusBadGateway, nil); got != "HTTP 502 Bad Gateway" {
+		t.Errorf("apiError = %q, want bare status for empty body", got)
+	}
+	long := strings.Repeat("x", 300)
+	if got := apiError(http.StatusInternalServerError, []byte(long)); len(got) > 160 {
+		t.Errorf("apiError did not bound the excerpt: %d chars", len(got))
 	}
 }
 

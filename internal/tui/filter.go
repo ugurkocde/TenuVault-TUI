@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"unicode"
 )
@@ -14,10 +15,40 @@ import (
 // never positions in the filtered view, so toggling and mouse hit-testing
 // stay correct while a filter is applied.
 
-// resetFilter clears the "/" filter when entering a filterable list screen.
+// resetFilter clears the "/" filter and the sort mode when entering a
+// filterable or sortable list screen.
 func (m *model) resetFilter() {
 	m.filterActive = false
 	m.filterQuery = ""
+	m.listSort = sortDefault
+}
+
+// sortMode orders a list screen's visible items. "s" cycles it.
+type sortMode int
+
+const (
+	sortDefault sortMode = iota // API/disk order (newest-first for backups)
+	sortName                    // case-insensitive name ascending
+)
+
+// cycleSort advances to the next sort mode.
+func cycleSort(mode sortMode) sortMode {
+	return (mode + 1) % 2
+}
+
+// sortVisible returns visible (original indexes) reordered by mode. The
+// backing slices are never reordered: cursors, selections, and mouse hits all
+// key off original indexes, so sorting composes with filtering for free.
+func sortVisible(visible []int, mode sortMode, name func(int) string) []int {
+	if mode == sortDefault {
+		return visible
+	}
+	out := make([]int, len(visible))
+	copy(out, visible)
+	sort.SliceStable(out, func(a, b int) bool {
+		return strings.ToLower(name(out[a])) < strings.ToLower(name(out[b]))
+	})
+	return out
 }
 
 // filterInputKey handles one keypress while the filter input is active and
@@ -127,19 +158,32 @@ func (m model) catsVisible() []int {
 
 // restoreVisible returns the visible original indexes of the restore items.
 func (m model) restoreVisible() []int {
-	return filterIndexes(len(m.restoreItems), func(i int) string { return m.restoreItems[i].item.Name }, m.filterQuery)
+	name := func(i int) string { return m.restoreItems[i].item.Name }
+	return sortVisible(filterIndexes(len(m.restoreItems), name, m.filterQuery), m.listSort, name)
 }
 
 // catPoliciesVisible returns the visible original indexes of the browse
 // category's policy files.
 func (m model) catPoliciesVisible() []int {
-	return filterIndexes(len(m.catPolicies), func(i int) string { return m.catPolicies[i].Name }, m.filterQuery)
+	name := func(i int) string { return m.catPolicies[i].Name }
+	return sortVisible(filterIndexes(len(m.catPolicies), name, m.filterQuery), m.listSort, name)
 }
 
 // syncPolVisible returns the visible original indexes of a sync type's
 // policies.
-func syncPolVisible(pols []syncPol, query string) []int {
-	return filterIndexes(len(pols), func(i int) string { return pols[i].name }, query)
+func syncPolVisible(pols []syncPol, query string, mode sortMode) []int {
+	name := func(i int) string { return pols[i].name }
+	return sortVisible(filterIndexes(len(pols), name, query), mode, name)
+}
+
+// browseVisible returns the display order of the backups list: store.List's
+// newest-first order by default, or folder name ascending under sortName.
+func (m model) browseVisible() []int {
+	idx := make([]int, len(m.backups))
+	for i := range idx {
+		idx[i] = i
+	}
+	return sortVisible(idx, m.listSort, func(i int) string { return m.backups[i].Folder })
 }
 
 // filterLine renders the "/" filter input with a match count, or "" when no
@@ -152,5 +196,17 @@ func (m model) filterLine(matches, total int) string {
 	if m.filterActive {
 		prompt += m.th.accent.Render("▌")
 	}
-	return prompt + m.th.cardLabel.Render(fmt.Sprintf("  %d of %d", matches, total)) + "\n"
+	line := prompt + m.th.cardLabel.Render(fmt.Sprintf("  %d of %d", matches, total))
+	if matches == 0 && m.filterQuery != "" {
+		line += "  " + m.th.warn.Render(fmt.Sprintf("no matches for %q (esc to clear)", m.filterQuery))
+	}
+	return line + "\n"
+}
+
+// sortTag renders the active sort mode indicator for a list crumb, or "".
+func (m model) sortTag() string {
+	if m.listSort == sortName {
+		return "  " + m.th.cardLabel.Render("sort: name")
+	}
+	return ""
 }
