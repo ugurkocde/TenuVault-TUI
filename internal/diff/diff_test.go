@@ -88,3 +88,10 @@ func TestCompareHandlesCategoryAddedOrRemoved(t *testing.T) {
 		t.Fatalf("changes=%+v, want one add and one removal", changes)
 	}
 }
+
+func TestIndexByNameReportsDisappearingCategory(t *testing.T) {
+	backup := store.Backup{Path: t.TempDir()}
+	if _, err := indexByName(backup, "DeletedDuringCompare"); err == nil {
+		t.Fatal("a category expected to exist must not be treated as empty")
+	}
+}

@@ -4,8 +4,6 @@
 package diff
 
 import (
-	"errors"
-	"io/fs"
 	"reflect"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/jsonutil"
@@ -65,16 +63,23 @@ func Compare(older, newer store.Backup) ([]Change, error) {
 		return nil, err
 	}
 	cats := union(oldCats, newCats)
+	oldSet, newSet := stringSet(oldCats), stringSet(newCats)
 
 	var changes []Change
 	for _, cat := range cats {
-		oldFiles, err := indexByName(older, cat)
-		if err != nil {
-			return nil, err
+		oldFiles := map[string]string{}
+		if oldSet[cat] {
+			oldFiles, err = indexByName(older, cat)
+			if err != nil {
+				return nil, err
+			}
 		}
-		newFiles, err := indexByName(newer, cat)
-		if err != nil {
-			return nil, err
+		newFiles := map[string]string{}
+		if newSet[cat] {
+			newFiles, err = indexByName(newer, cat)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		for name, np := range newFiles {
@@ -104,15 +109,20 @@ func indexByName(b store.Backup, cat string) (map[string]string, error) {
 	out := map[string]string{}
 	files, err := b.Policies(cat)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return out, nil
-		}
 		return nil, err
 	}
 	for _, f := range files {
 		out[f.Name] = f.Path
 	}
 	return out, nil
+}
+
+func stringSet(values []string) map[string]bool {
+	out := make(map[string]bool, len(values))
+	for _, value := range values {
+		out[value] = true
+	}
+	return out
 }
 
 func equalPolicy(pathA, pathB string) (bool, error) {

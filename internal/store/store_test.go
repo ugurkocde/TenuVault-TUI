@@ -72,3 +72,18 @@ func TestListSkipsBackupWithoutCommitManifest(t *testing.T) {
 		t.Fatalf("backups=%v, want incomplete directory hidden", backups)
 	}
 }
+
+func TestCleanupRemovesStaleUncommittedBackup(t *testing.T) {
+	root := t.TempDir()
+	old := "backup-" + time.Now().AddDate(0, 0, -40).Format("2006-01-02-150405.000000000")
+	if err := os.Mkdir(filepath.Join(root, old), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := Cleanup(root, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed=%d, want stale incomplete backup removed", removed)
+	}
+}

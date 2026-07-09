@@ -235,23 +235,30 @@ func Cleanup(root string, days int) (int, error) {
 	if days <= 0 {
 		return 0, nil
 	}
-	backups, err := List(root)
+	entries, err := os.ReadDir(root)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
 		return 0, err
 	}
 	cutoff := time.Now().AddDate(0, 0, -days)
 	removed := 0
 	var removeErrs []error
-	for _, b := range backups {
-		ts, err := backupFolderTime(b.Folder)
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "backup-") {
+			continue
+		}
+		ts, err := backupFolderTime(entry.Name())
 		if err != nil {
 			continue
 		}
 		if ts.Before(cutoff) {
-			if err := os.RemoveAll(b.Path); err == nil {
+			path := filepath.Join(root, entry.Name())
+			if err := os.RemoveAll(path); err == nil {
 				removed++
 			} else {
-				removeErrs = append(removeErrs, fmt.Errorf("remove %s: %w", b.Folder, err))
+				removeErrs = append(removeErrs, fmt.Errorf("remove %s: %w", entry.Name(), err))
 			}
 		}
 	}
