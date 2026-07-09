@@ -110,3 +110,22 @@ func TestBackupItemsNameFilterIntegration(t *testing.T) {
 		t.Errorf("items = %+v", items)
 	}
 }
+
+func TestSelectedTypesRejectsUnknownKeys(t *testing.T) {
+	if _, err := selectedTypes("deviceConfigurations,typo"); err == nil {
+		t.Fatal("unknown category key should be rejected")
+	}
+}
+
+func TestSyncDryRunRejectsUnknownCategory(t *testing.T) {
+	t.Setenv("TENUVAULT_SOURCE_TENANT_ID", "")
+	if code := Sync([]string{"--from-backup", fixtureBackup(t), "--categories", "typo", "--dry-run"}); code != 2 {
+		t.Fatalf("exit=%d, want 2", code)
+	}
+}
+
+func TestBackupItemsReportsUnreadableBackup(t *testing.T) {
+	if _, err := backupItems(filepath.Join(t.TempDir(), "missing"), ""); err == nil {
+		t.Fatal("missing backup should return an error")
+	}
+}

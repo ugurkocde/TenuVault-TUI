@@ -222,6 +222,42 @@ func TestDoRetriesOn503(t *testing.T) {
 	}
 }
 
+func TestDoRetriesGetOn502ButNotPost(t *testing.T) {
+	var getAttempts int32
+	getClient, _ := testClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		if atomic.AddInt32(&getAttempts, 1) == 1 {
+			return resp(http.StatusBadGateway, "", http.Header{"Retry-After": {"0"}}), nil
+		}
+		return resp(http.StatusOK, `{"ok":true}`, nil), nil
+	}))
+	if _, _, err := getClient.do(context.Background(), http.MethodGet, baseV1+"/me", nil); err != nil {
+		t.Fatalf("GET after 502 retry: %v", err)
+	}
+	if getAttempts != 2 {
+		t.Fatalf("GET attempts=%d, want 2", getAttempts)
+	}
+
+	var postAttempts int32
+	postClient, _ := testClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		atomic.AddInt32(&postAttempts, 1)
+		return resp(http.StatusBadGateway, "", nil), nil
+	}))
+	if _, _, err := postClient.do(context.Background(), http.MethodPost, baseV1+"/things", []byte(`{}`)); err == nil {
+		t.Fatal("POST 502 should fail without retry")
+	}
+	if postAttempts != 1 {
+		t.Fatalf("POST attempts=%d, want 1", postAttempts)
+	}
+}
+
+func TestRetryAfterParsesHTTPDate(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	got, ok := retryAfter(now.Add(10*time.Second).Format(http.TimeFormat), now)
+	if !ok || got != 10*time.Second {
+		t.Fatalf("retryAfter=%v ok=%v, want 10s", got, ok)
+	}
+}
+
 func TestDoRetries429OnPost(t *testing.T) {
 	// A 429 means Graph rejected the request without applying it, so retrying a
 	// POST is safe (unlike a transport error, which is never retried for POST).

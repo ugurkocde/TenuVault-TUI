@@ -30,3 +30,27 @@ func TestCleanup(t *testing.T) {
 		t.Error("recent backup should remain")
 	}
 }
+
+func TestListRejectsCorruptMetadata(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "backup-2026-01-01-000000")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte("{bad"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := List(root); err == nil {
+		t.Fatal("corrupt metadata should be reported")
+	}
+}
+
+func TestBackupFolderTimeSupportsUniqueSuffix(t *testing.T) {
+	got, err := backupFolderTime("backup-2026-07-09-120000.000000123-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Nanosecond() != 123 {
+		t.Fatalf("nanoseconds=%d, want 123", got.Nanosecond())
+	}
+}

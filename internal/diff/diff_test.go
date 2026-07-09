@@ -60,3 +60,14 @@ func TestCompare(t *testing.T) {
 		t.Error("c should be unchanged (only lastModifiedDateTime differs)")
 	}
 }
+
+func TestEqualPolicyReportsReadFailure(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "good.json")
+	if err := os.WriteFile(good, []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := equalPolicy(good, filepath.Join(dir, "missing.json")); err == nil {
+		t.Fatal("missing policy file should return an error")
+	}
+}
