@@ -3,6 +3,8 @@ package policyops
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -80,6 +82,43 @@ func TestCreateGroupPolicyMultiPart(t *testing.T) {
 	}
 }
 
+func TestCreateGroupPolicyRollsBackWhenSettingsFail(t *testing.T) {
+	raw := []byte(`{"displayName":"ADM Test","definitionValues":[{"enabled":true,"definition":{"id":"def-1"}}]}`)
+	f := &graphtest.Fake{PostFunc: func(_ string, path string, _ json.RawMessage) (json.RawMessage, error) {
+		if strings.HasSuffix(path, "/updateDefinitionValues") {
+			return nil, errors.New("settings rejected")
+		}
+		return json.RawMessage(`{"id":"created-1"}`), nil
+	}}
+
+	id, err := Create(context.Background(), f, "GroupPolicyConfigurations", raw, "")
+	if err == nil || id != "" {
+		t.Fatalf("id=%q err=%v, want rolled-back error with no live id", id, err)
+	}
+	if len(f.Deletes) != 1 || !strings.HasSuffix(f.Deletes[0], "/groupPolicyConfigurations/created-1") {
+		t.Fatalf("rollback deletes = %v", f.Deletes)
+	}
+}
+
+func TestCreateGroupPolicyReportsFailedRollback(t *testing.T) {
+	raw := []byte(`{"displayName":"ADM Test","definitionValues":[{"enabled":true,"definition":{"id":"def-1"}}]}`)
+	f := &graphtest.Fake{
+		PostFunc: func(_ string, path string, _ json.RawMessage) (json.RawMessage, error) {
+			if strings.HasSuffix(path, "/updateDefinitionValues") {
+				return nil, errors.New("settings rejected")
+			}
+			return json.RawMessage(`{"id":"created-1"}`), nil
+		},
+		DeleteFunc: func(_, _ string) error { return errors.New("delete denied") },
+	}
+
+	id, err := Create(context.Background(), f, "GroupPolicyConfigurations", raw, "")
+	var partial *PartialCreateError
+	if id != "created-1" || !errors.As(err, &partial) || partial.PolicyID != id {
+		t.Fatalf("id=%q err=%#v, want typed partial-create error", id, err)
+	}
+}
+
 func TestCreateIntentUsesCreateInstance(t *testing.T) {
 	raw := []byte(`{
 		"id":"old","displayName":"Baseline","description":"d",
@@ -142,5 +181,22 @@ func TestFetchFullGroupPolicyTwoLevel(t *testing.T) {
 	pvs, _ := dv["presentationValues"].([]any)
 	if len(pvs) != 1 {
 		t.Errorf("presentationValues not embedded: %+v", dv)
+	}
+}
+
+func TestFetchFullWarnsWhenAssignmentsFail(t *testing.T) {
+	pt, ok := catalog.ByKey("deviceConfigurations")
+	if !ok {
+		t.Fatal("deviceConfigurations missing from catalog")
+	}
+	f := &graphtest.Fake{ListFunc: func(_, path string, _ url.Values) ([]json.RawMessage, error) {
+		if strings.HasSuffix(path, "/assignments") {
+			return nil, errors.New("forbidden")
+		}
+		return nil, nil
+	}}
+	_, warn := FetchFull(context.Background(), f, pt, []byte(`{"id":"cfg-1","displayName":"x"}`), true)
+	if !warn {
+		t.Fatal("assignment failure must mark the policy incomplete")
 	}
 }

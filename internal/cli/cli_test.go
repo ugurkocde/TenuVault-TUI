@@ -101,7 +101,11 @@ func TestFilterByNames(t *testing.T) {
 // backup dir and the name filter narrows them.
 func TestBackupItemsNameFilterIntegration(t *testing.T) {
 	dir := fixtureBackup(t)
-	items := filterByNames(backupItems(dir, ""), "Beta")
+	all, err := backupItems(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := filterByNames(all, "Beta")
 	if len(items) != 1 || items[0].Name != "Beta" || items[0].Category != "CompliancePolicies" {
 		t.Errorf("items = %+v", items)
 	}

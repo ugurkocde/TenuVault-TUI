@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
+	"github.com/ugurkocde/TenuVault-TUI/internal/fileutil"
 	"github.com/ugurkocde/TenuVault-TUI/internal/graph"
 	"github.com/ugurkocde/TenuVault-TUI/internal/jsonutil"
 	"github.com/ugurkocde/TenuVault-TUI/internal/policyops"
@@ -80,9 +81,8 @@ type Result struct {
 // finalized with Status "Cancelled".
 func Run(ctx context.Context, c graph.API, types []catalog.PolicyType, opts Options, progress func(Event)) (Result, error) {
 	start := time.Now()
-	folder := "backup-" + start.Format("2006-01-02-150405")
-	path := filepath.Join(opts.Root, folder)
-	if err := os.MkdirAll(path, 0o755); err != nil {
+	folder, path, err := createBackupDir(opts.Root, start)
+	if err != nil {
 		return Result{}, fmt.Errorf("create backup folder: %w", err)
 	}
 
@@ -249,9 +249,6 @@ loop:
 		TenantID:        opts.Tenant.ID,
 		TenantName:      opts.Tenant.DisplayName,
 	}
-	if err := writeMetadata(path, meta); err != nil {
-		return Result{}, err
-	}
 	// Partial (cancelled) backups get partial checksums: everything kept on
 	// disk stays verifiable.
 	if err := store.WriteChecksums(path, checksums); err != nil {
@@ -260,13 +257,21 @@ loop:
 	var notes []string
 	if resolver != nil {
 		if names := resolver.resolved(); len(names) > 0 {
-			writeGroups(path, names)
+			if err := writeGroups(path, names); err != nil {
+				return Result{}, fmt.Errorf("write groups sidecar: %w", err)
+			}
 		}
 		if resolver.wasDisabled() {
 			notes = append(notes, "group names unavailable: Group.Read.All not granted (assignments keep raw ids)")
 		}
 	}
-	writeLog(path, meta, catList, notes)
+	if err := writeLog(path, meta, catList, notes); err != nil {
+		return Result{}, fmt.Errorf("write backup log: %w", err)
+	}
+	// Write the manifest last: it is the commit marker for a complete backup.
+	if err := writeMetadata(path, meta); err != nil {
+		return Result{}, err
+	}
 
 	return Result{Folder: folder, Path: path, Status: status, ItemCounts: counts, Categories: catList}, nil
 }
@@ -286,7 +291,7 @@ func writePolicy(dir, name string, raw json.RawMessage) (string, string, error) 
 		return "", "", err
 	}
 	file := uniquePath(filepath.Join(dir, jsonutil.SanitizeFilename(name)+".json"))
-	if err := os.WriteFile(file, data, 0o644); err != nil {
+	if err := fileutil.WriteFileAtomic(file, data, 0o644); err != nil {
 		return "", "", err
 	}
 	sum := sha256.Sum256(data)
@@ -298,22 +303,22 @@ func writeMetadata(dir string, m store.Metadata) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "metadata.json"), data, 0o644)
+	return fileutil.WriteFileAtomic(filepath.Join(dir, "metadata.json"), data, 0o644)
 }
 
 // writeGroups records the assignment group id -> display name map next to the
 // manifest, so drift reports and audits can label group ids without a live
 // directory lookup. Root-level sidecar: category folders stay policy-only.
-func writeGroups(dir string, names map[string]string) {
+func writeGroups(dir string, names map[string]string) error {
 	data, err := json.MarshalIndent(names, "", "  ")
 	if err != nil {
-		return
+		return err
 	}
-	_ = os.WriteFile(filepath.Join(dir, "groups.json"), data, 0o644)
+	return fileutil.WriteFileAtomic(filepath.Join(dir, "groups.json"), data, 0o644)
 }
 
 // writeLog records a human-readable per-category outcome next to the backup.
-func writeLog(dir string, m store.Metadata, cats []CategoryResult, notes []string) {
+func writeLog(dir string, m store.Metadata, cats []CategoryResult, notes []string) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "TenuVault backup %s\n", m.BackupFolder)
 	fmt.Fprintf(&b, "tenant: %s (%s)\n", m.TenantName, m.TenantID)
@@ -335,7 +340,29 @@ func writeLog(dir string, m store.Metadata, cats []CategoryResult, notes []strin
 	for _, n := range notes {
 		fmt.Fprintf(&b, "note     %s\n", n)
 	}
-	_ = os.WriteFile(filepath.Join(dir, "backup.log"), []byte(b.String()), 0o644)
+	return fileutil.WriteFileAtomic(filepath.Join(dir, "backup.log"), []byte(b.String()), 0o644)
+}
+
+// createBackupDir reserves a unique directory. Nanoseconds make ordinary
+// collisions unlikely; os.Mkdir closes the race between simultaneous runs.
+func createBackupDir(root string, start time.Time) (folder, path string, err error) {
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", "", err
+	}
+	base := "backup-" + start.Format("2006-01-02-150405.000000000")
+	for i := 0; i < 1000; i++ {
+		folder = base
+		if i > 0 {
+			folder = fmt.Sprintf("%s-%d", base, i)
+		}
+		path = filepath.Join(root, folder)
+		if err := os.Mkdir(path, 0o755); err == nil {
+			return folder, path, nil
+		} else if !os.IsExist(err) {
+			return "", "", err
+		}
+	}
+	return "", "", fmt.Errorf("could not allocate a unique backup folder")
 }
 
 func condense(s string) string {

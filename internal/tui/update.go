@@ -50,7 +50,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.connected = true
 		m.status, m.statusKind = "Connected to "+msg.tenant.DisplayName, "ok"
-		m.persistConnections()
+		if err := m.persistConnections(); err != nil {
+			m.status, m.statusKind = "Connected, but saving tenant failed: "+err.Error(), "warn"
+		}
 		if m.addingConn {
 			m.addingConn = false
 			m.connRemove = -1
@@ -65,12 +67,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err = msg.err
+		if m.addingConn {
+			m.errorReturn = screenConnections
+			m.addingConn = false
+		} else {
+			m.errorReturn = screenAuth
+		}
 		m.goTo(screenError)
 		return m, nil
 
 	case errMsg:
 		m.err = msg.err
 		m.browseLoading = false
+		m.errorReturn = m.screen
 		m.goTo(screenError)
 		return m, nil
 
@@ -143,12 +152,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case diffDoneMsg:
 		m.diffChanges = msg.changes
 		m.diffScroll = 0
+		active := m.diffLoading
+		m.diffLoading = false
 		if msg.err != nil {
+			if !active {
+				m.status, m.statusKind = "Compare failed: "+msg.err.Error(), "err"
+				return m, nil
+			}
 			m.err = msg.err
+			m.errorReturn = screenBrowse
 			m.goTo(screenError)
 			return m, nil
 		}
-		m.goTo(screenDiffResult)
+		if active && m.screen == screenBrowse {
+			m.goTo(screenDiffResult)
+		} else {
+			m.status, m.statusKind = "Compare finished", "ok"
+		}
 		return m, nil
 
 	case syncPoliciesLoadedMsg:
@@ -156,6 +176,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case verifyDoneMsg:
+		m.verifyRunning = false
 		switch {
 		case msg.err != nil:
 			m.status, m.statusKind = "Verify: "+msg.err.Error(), "warn"
@@ -252,7 +273,12 @@ func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 	case screenConnecting:
 		if key == "esc" {
 			m.connGen++ // orphan the in-flight attempt so its result is dropped
-			m.goTo(screenAuth)
+			if m.addingConn {
+				m.addingConn = false
+				m.goTo(screenConnections)
+			} else {
+				m.goTo(screenAuth)
+			}
 		}
 		return m, nil
 	case screenDashboard:
@@ -304,10 +330,14 @@ func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 	case screenError:
 		if key == "enter" || key == "esc" {
 			m.err = nil
-			m.goTo(screenDashboard)
-			if !m.connected {
-				m.goTo(screenAuth)
+			dest := m.errorReturn
+			if dest == screenError || dest == screenConnecting {
+				dest = screenDashboard
 			}
+			if !m.connected && dest == screenDashboard {
+				dest = screenAuth
+			}
+			m.goTo(dest)
 		}
 		return m, nil
 	}
@@ -334,6 +364,11 @@ func (m model) keyAuth(key string) (tea.Model, tea.Cmd) {
 		}
 	case "q":
 		return m, tea.Quit
+	case "esc":
+		if m.addingConn {
+			m.addingConn = false
+			m.goTo(screenConnections)
+		}
 	case "enter":
 		method := m.authOptions[m.authCursor].method
 		if method == config.AuthInteractive {
@@ -460,6 +495,7 @@ func (m model) keyBackupSelect(key string) (tea.Model, tea.Cmd) {
 	case "enter":
 		types := m.selectedTypes()
 		if len(types) == 0 {
+			m.status, m.statusKind = "Select at least one category", "err"
 			return m, nil
 		}
 		m.progTitle = "Backing up"
@@ -478,8 +514,9 @@ func (m model) keyBackupSelect(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) keyBrowse(key string) (tea.Model, tea.Cmd) {
-	if m.browseLoading {
+	if m.browseLoading || m.diffLoading {
 		if key == "esc" || key == "q" {
+			m.diffLoading = false
 			m.goTo(screenDashboard)
 		}
 		return m, nil
@@ -502,11 +539,23 @@ func (m model) keyBrowse(key string) (tea.Model, tea.Cmd) {
 		switch m.browseMode {
 		case modeView:
 			m.detail = &b
-			m.detailCats = scanCategories(b)
+			cats, err := scanCategories(b)
+			if err != nil {
+				m.err, m.errorReturn = err, screenBrowse
+				m.goTo(screenError)
+				return m, nil
+			}
+			m.detailCats = cats
 			m.goTo(screenBrowseDetail)
 		case modeRestore, modeSyncBackup:
 			m.restoreBackup = &b
-			m.restoreItems = buildRestoreItems(b)
+			items, err := buildRestoreItems(b)
+			if err != nil {
+				m.err, m.errorReturn = err, screenBrowse
+				m.goTo(screenError)
+				return m, nil
+			}
+			m.restoreItems = items
 			m.restoreCursor, m.restoreScroll = 0, 0
 			m.syncMode = m.browseMode == modeSyncBackup
 			m.resetFilter()
@@ -520,6 +569,7 @@ func (m model) keyBrowse(key string) (tea.Model, tea.Cmd) {
 			t := b
 			m.diffB = &t
 			older, newer := orderBackups(m.diffA, m.diffB)
+			m.diffLoading = true
 			return m, runDiff(older, newer)
 		}
 	}
@@ -539,7 +589,13 @@ func (m model) keyBrowseDetail(key string) (tea.Model, tea.Cmd) {
 	case "enter":
 		if m.detail != nil && len(m.detailCats) > 0 {
 			m.catName = m.detailCats[m.detailCursor].name
-			m.catPolicies, _ = m.detail.Policies(m.catName)
+			policies, err := m.detail.Policies(m.catName)
+			if err != nil {
+				m.err, m.errorReturn = err, screenBrowseDetail
+				m.goTo(screenError)
+				return m, nil
+			}
+			m.catPolicies = policies
 			m.policyCursor = 0
 			m.resetFilter()
 			m.goTo(screenCategoryPolicies)
@@ -549,14 +605,22 @@ func (m model) keyBrowseDetail(key string) (tea.Model, tea.Cmd) {
 	case "q":
 		m.goTo(screenDashboard)
 	case "v":
-		if m.detail != nil {
+		if m.detail != nil && !m.verifyRunning {
+			m.verifyRunning = true
+			m.status, m.statusKind = "Verifying backup integrity…", "ok"
 			return m, runVerify(m.detail.Path)
 		}
 	case "r":
 		if m.detail != nil {
 			b := *m.detail
 			m.restoreBackup = &b
-			m.restoreItems = buildRestoreItems(b)
+			items, err := buildRestoreItems(b)
+			if err != nil {
+				m.err, m.errorReturn = err, screenBrowseDetail
+				m.goTo(screenError)
+				return m, nil
+			}
+			m.restoreItems = items
 			m.restoreCursor, m.restoreScroll = 0, 0
 			// A restore started here must never inherit sync routing from an
 			// earlier, abandoned sync flow.
@@ -607,15 +671,25 @@ func (m model) keyCategoryPolicies(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) keyPolicyView(key string) (tea.Model, tea.Cmd) {
+	page := m.listRows(18)
+	maxScroll := max(0, len(m.policyLines)-page)
 	switch key {
 	case "up", "k":
 		if m.policyScroll > 0 {
 			m.policyScroll--
 		}
 	case "down", "j":
-		if m.policyScroll < len(m.policyLines)-1 {
+		if m.policyScroll < maxScroll {
 			m.policyScroll++
 		}
+	case "pgup":
+		m.policyScroll = max(0, m.policyScroll-page)
+	case "pgdown":
+		m.policyScroll = min(maxScroll, m.policyScroll+page)
+	case "home":
+		m.policyScroll = 0
+	case "end":
+		m.policyScroll = maxScroll
 	case "esc", "q":
 		m.goTo(screenCategoryPolicies)
 	}
@@ -637,17 +711,16 @@ func (m model) keySettings(key string) (tea.Model, tea.Cmd) {
 		if m.settingsCursor == 0 {
 			m.cfg.IncludeAssignments = !m.cfg.IncludeAssignments
 		}
-		_ = config.Save(m.cfg)
-		m.status, m.statusKind = "Settings saved", "ok"
+		m.setConfigSaveStatus(config.Save(m.cfg))
 	case "+", "=", "right", "l":
 		if m.settingsCursor == 1 && m.cfg.RetentionDays < 3650 {
 			m.cfg.RetentionDays++
-			_ = config.Save(m.cfg)
+			m.setConfigSaveStatus(config.Save(m.cfg))
 		}
 	case "-", "left", "h":
 		if m.settingsCursor == 1 && m.cfg.RetentionDays > 0 {
 			m.cfg.RetentionDays--
-			_ = config.Save(m.cfg)
+			m.setConfigSaveStatus(config.Save(m.cfg))
 		}
 	case "esc", "q":
 		m.goTo(screenDashboard)
@@ -655,16 +728,30 @@ func (m model) keySettings(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *model) setConfigSaveStatus(err error) {
+	if err != nil {
+		m.status, m.statusKind = "Could not save settings: "+err.Error(), "err"
+		return
+	}
+	m.status, m.statusKind = "Settings saved", "ok"
+}
+
 func (m model) keyDiffResult(key string) (tea.Model, tea.Cmd) {
+	page := m.listRows(12)
+	maxScroll := max(0, len(m.diffChanges)-page)
 	switch key {
 	case "up", "k":
 		if m.diffScroll > 0 {
 			m.diffScroll--
 		}
 	case "down", "j":
-		if m.diffScroll < len(m.diffChanges)-1 {
+		if m.diffScroll < maxScroll {
 			m.diffScroll++
 		}
+	case "pgup":
+		m.diffScroll = max(0, m.diffScroll-page)
+	case "pgdown":
+		m.diffScroll = min(maxScroll, m.diffScroll+page)
 	case "e":
 		return m, exportReport(m.cfg.BackupRoot, "diff", m.diffReport())
 	case "esc", "q":
@@ -734,6 +821,7 @@ func (m model) keyRestorePick(key string) (tea.Model, tea.Cmd) {
 	case "enter":
 		sel := m.selectedRestoreItems()
 		if len(sel) == 0 {
+			m.status, m.statusKind = "Select at least one policy", "err"
 			return m, nil
 		}
 		if m.syncMode {
@@ -762,6 +850,7 @@ func (m model) keyRestoreConfirm(key string) (tea.Model, tea.Cmd) {
 	case "y":
 		items := m.selectedRestoreItems()
 		if len(items) == 0 {
+			m.status, m.statusKind = "Select at least one policy", "err"
 			m.goTo(screenRestorePick)
 			return m, nil
 		}
@@ -803,31 +892,43 @@ func sanitizePaste(s string) string {
 }
 
 // scanCategories counts policy files per category in a backup.
-func scanCategories(b store.Backup) []catCount {
-	cats, _ := b.Categories()
+func scanCategories(b store.Backup) ([]catCount, error) {
+	cats, err := b.Categories()
+	if err != nil {
+		return nil, err
+	}
 	var out []catCount
 	for _, c := range cats {
-		files, _ := b.Policies(c)
+		files, err := b.Policies(c)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, catCount{name: c, count: len(files)})
 	}
-	return out
+	return out, nil
 }
 
 // buildRestoreItems flattens restorable policies in a backup into restore items,
 // skipping any category whose type has no create/restore route.
-func buildRestoreItems(b store.Backup) []restoreSel {
-	cats, _ := b.Categories()
+func buildRestoreItems(b store.Backup) ([]restoreSel, error) {
+	cats, err := b.Categories()
+	if err != nil {
+		return nil, err
+	}
 	var out []restoreSel
 	for _, c := range cats {
 		if !catalog.CategoryRestoreSupported(c) {
 			continue
 		}
-		files, _ := b.Policies(c)
+		files, err := b.Policies(c)
+		if err != nil {
+			return nil, err
+		}
 		for _, f := range files {
 			out = append(out, restoreSel{item: restore.Item{Category: c, Name: f.Name, Path: f.Path}})
 		}
 	}
-	return out
+	return out, nil
 }
 
 // orderBackups returns (older, newer) by folder name. It tolerates nil inputs

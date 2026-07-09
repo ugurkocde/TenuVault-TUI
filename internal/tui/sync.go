@@ -1,7 +1,10 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -9,6 +12,7 @@ import (
 	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
 	"github.com/ugurkocde/TenuVault-TUI/internal/config"
 	"github.com/ugurkocde/TenuVault-TUI/internal/restore"
+	"github.com/ugurkocde/TenuVault-TUI/internal/store"
 	"github.com/ugurkocde/TenuVault-TUI/internal/syncer"
 )
 
@@ -154,11 +158,18 @@ func (m *model) removeConnection(row connRow) {
 		m.syncTargetConn = shiftIdx(m.syncTargetConn, row.liveIdx)
 		m.connected = len(m.conns) > 0
 	}
-	m.persistConnections()
+	saveErr := m.persistConnections()
 	if m.connCursor > 0 {
 		m.connCursor--
 	}
-	m.status, m.statusKind = "Removed "+row.label, "ok"
+	if saveErr != nil {
+		m.status, m.statusKind = "Removed tenant, but saving failed: "+saveErr.Error(), "warn"
+	} else {
+		m.status, m.statusKind = "Removed "+row.label, "ok"
+	}
+	if !m.connected {
+		m.goTo(screenConnections)
+	}
 }
 
 // shiftIdx adjusts a connection index after the entry at removed is deleted:
@@ -265,6 +276,7 @@ func (m model) keySyncSelect(key string) (tea.Model, tea.Cmd) {
 	case "n", "tab":
 		m.syncItems = m.gatherLiveSyncItems()
 		if len(m.syncItems) == 0 {
+			m.status, m.statusKind = "Select at least one policy", "err"
 			return m, nil
 		}
 		m.syncTargetCursor = 0
@@ -465,6 +477,18 @@ func (m model) keySyncConfirm(key string) (tea.Model, tea.Cmd) {
 			m.goTo(screenSyncSource)
 			return m, nil
 		}
+		if m.syncFromBackup && m.syncNamePrefix == "" {
+			same, err := m.backupMatchesSyncTarget()
+			if err != nil {
+				m.status, m.statusKind = "Cannot verify backup tenant: "+err.Error(), "err"
+				return m, nil
+			}
+			if same {
+				m.status, m.statusKind = "Choose a name prefix before syncing a backup into its source tenant", "err"
+				m.goTo(screenSyncNaming)
+				return m, nil
+			}
+		}
 		// Fail closed: the source client is only the chosen sync source (nil for a
 		// backup source), never the dashboard's active connection.
 		source := m.syncSourceClient()
@@ -478,6 +502,21 @@ func (m model) keySyncConfirm(key string) (tea.Model, tea.Cmd) {
 		m.goTo(screenSyncNaming)
 	}
 	return m, nil
+}
+
+func (m model) backupMatchesSyncTarget() (bool, error) {
+	if m.restoreBackup == nil || m.syncTargetConn < 0 || m.syncTargetConn >= len(m.conns) {
+		return false, nil
+	}
+	data, err := os.ReadFile(filepath.Join(m.restoreBackup.Path, "metadata.json"))
+	if err != nil {
+		return false, err
+	}
+	var meta store.Metadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return false, err
+	}
+	return meta.TenantID != "" && meta.TenantID == m.conns[m.syncTargetConn].Tenant.ID, nil
 }
 
 func allSelected(pols []syncPol) bool {
@@ -576,7 +615,7 @@ func (m model) viewSyncSelect(w int) string {
 	b.WriteString(m.syncCrumb("select", 2) + "  " + m.th.dim.Render("source: "+m.syncSourceLabel) + "\n")
 	b.WriteString(m.th.cardLabel.Render("space = whole type · enter = pick policies · n = choose target") + "\n\n")
 	total := 0
-	start, end := window(m.syncTypeCursor, len(m.syncTypes), 16)
+	start, end := window(m.syncTypeCursor, len(m.syncTypes), m.listRows(16))
 	for i := start; i < end; i++ {
 		st := m.syncTypes[i]
 		sel := countSelected(st.policies)
@@ -639,7 +678,7 @@ func (m model) viewSyncPolicies(w int) string {
 	if len(visible) == 0 {
 		return b.String()
 	}
-	startp, endp := window(filteredPos(m.syncPolCursor, visible), len(visible), 14)
+	startp, endp := window(filteredPos(m.syncPolCursor, visible), len(visible), m.listRows(14))
 	for vp := startp; vp < endp; vp++ {
 		i := visible[vp]
 		p := st.policies[i]

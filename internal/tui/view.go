@@ -21,6 +21,19 @@ func (m model) width0() int {
 	return m.width
 }
 
+// listRows bounds long views to the terminal height. The fixed allowance covers
+// the header, dividers, status, footer, title, and surrounding blank lines.
+func (m model) listRows(preferred int) int {
+	if m.height <= 0 {
+		return preferred
+	}
+	available := m.height - 12
+	if available < 4 {
+		return 4
+	}
+	return min(preferred, available)
+}
+
 func (m model) render() string {
 	w := m.width0()
 	if m.hits != nil {
@@ -253,7 +266,7 @@ func (m model) viewBackupSelect(w int) string {
 	}
 
 	// Window the long list around the cursor; print group headers inline.
-	start, end := window(filteredPos(m.catCursor, visible), len(visible), 16)
+	start, end := window(filteredPos(m.catCursor, visible), len(visible), m.listRows(16))
 	lastGroup := ""
 	for vp := start; vp < end; vp++ {
 		i := visible[vp]
@@ -350,12 +363,16 @@ func (m model) viewBrowse(w int) (string, string) {
 		b.WriteString(m.th.inProg.Render(spinnerFrames[m.frame%len(spinnerFrames)] + " scanning backups…"))
 		return b.String(), "esc back"
 	}
+	if m.diffLoading {
+		b.WriteString(m.th.inProg.Render(spinnerFrames[m.frame%len(spinnerFrames)] + " comparing backups…"))
+		return b.String(), "esc continue in background"
+	}
 	if len(m.backups) == 0 {
 		b.WriteString(m.th.dim.Render("No backups yet. Run a backup first."))
 		return b.String(), "esc back"
 	}
 	visible := m.browseVisible()
-	start, end := window(filteredPos(m.browseCursor, visible), len(visible), 12)
+	start, end := window(filteredPos(m.browseCursor, visible), len(visible), m.listRows(12))
 	for vp := start; vp < end; vp++ {
 		i := visible[vp]
 		bk := m.backups[i]
@@ -386,6 +403,9 @@ func (m model) viewBrowseDetail(w int) string {
 	if m.detail.Meta.TenantName != "" {
 		b.WriteString(m.th.dim.Render("tenant "+m.detail.Meta.TenantName) + "\n")
 	}
+	if m.verifyRunning {
+		b.WriteString(m.th.inProg.Render(spinnerFrames[m.frame%len(spinnerFrames)]+" verifying integrity…") + "\n")
+	}
 	b.WriteString("\n")
 	for i, c := range m.detailCats {
 		label := m.th.normal.Render(c.name)
@@ -412,7 +432,7 @@ func (m model) viewCategoryPolicies(w int) string {
 	if len(visible) == 0 {
 		return b.String()
 	}
-	start, end := window(filteredPos(m.policyCursor, visible), len(visible), 14)
+	start, end := window(filteredPos(m.policyCursor, visible), len(visible), m.listRows(14))
 	for vp := start; vp < end; vp++ {
 		i := visible[vp]
 		p := m.catPolicies[i]
@@ -442,7 +462,7 @@ func (m model) viewPolicyView(w int) string {
 		b.WriteString(m.th.dim.Render("(empty)"))
 		return b.String()
 	}
-	size := 18
+	size := m.listRows(18)
 	start, end := m.policyScroll, m.policyScroll+size
 	if end > len(m.policyLines) {
 		end = len(m.policyLines)
@@ -497,7 +517,7 @@ func (m model) viewDiffResult(w int) string {
 		return b.String()
 	}
 	b.WriteString(m.th.normal.Render(fmt.Sprintf("%d changes", len(m.diffChanges))) + "\n\n")
-	start, end := window(m.diffScroll, len(m.diffChanges), 12)
+	start, end := window(m.diffScroll, len(m.diffChanges), m.listRows(12))
 	for i := start; i < end; i++ {
 		c := m.diffChanges[i]
 		b.WriteString("  " + sevStyle(m.th, c.Severity).Render(sevBullet(c.Type)) + " " +
@@ -537,7 +557,7 @@ func (m model) viewRestorePick(w int) string {
 	if len(visible) == 0 {
 		return b.String()
 	}
-	start, end := window(filteredPos(m.restoreCursor, visible), len(visible), 12)
+	start, end := window(filteredPos(m.restoreCursor, visible), len(visible), m.listRows(12))
 	for vp := start; vp < end; vp++ {
 		i := visible[vp]
 		r := m.restoreItems[i]
@@ -608,6 +628,9 @@ func (m model) viewRestoreResult(w int) string {
 		} else {
 			ok++
 			b.WriteString("  " + m.th.success.Render("✔") + " " + m.th.normal.Render("[Restored] "+r.Item.Name) + "\n")
+			if r.Warn {
+				b.WriteString("    " + m.th.warn.Render("⚠ created with partial content") + "\n")
+			}
 		}
 	}
 	b.WriteString("\n" + m.th.accent.Render(fmt.Sprintf("%d succeeded, %d failed", ok, fail)))

@@ -10,8 +10,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/auth"
 	"github.com/ugurkocde/TenuVault-TUI/internal/backup"
@@ -25,17 +27,21 @@ import (
 )
 
 // connect builds an authenticated Graph client and fetches the tenant.
-func connect(cfg config.Config) (graph.API, graph.Tenant, error) {
+func connect(ctx context.Context, cfg config.Config) (graph.API, graph.Tenant, error) {
 	cred, err := auth.New(cfg)
 	if err != nil {
 		return nil, graph.Tenant{}, err
 	}
 	c := graph.New(cred, auth.ScopesFor(cfg.AuthMethod))
-	tenant, err := c.Organization(context.Background())
+	tenant, err := c.Organization(ctx)
 	if err != nil {
 		return nil, graph.Tenant{}, err
 	}
 	return c, tenant, nil
+}
+
+func commandContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
 // Backup runs a headless backup. Returns a process exit code.
@@ -53,13 +59,20 @@ func Backup(args []string) int {
 	if *out != "" {
 		root = *out
 	}
-	c, tenant, err := connect(cfg)
+	types, err := selectedTypes(*categories)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 2
+	}
+	ctx, cancel := commandContext()
+	defer cancel()
+	c, tenant, err := connect(ctx, cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
 	}
 
-	res, err := backup.Run(context.Background(), c, selectedTypes(*categories),
+	res, err := backup.Run(ctx, c, types,
 		backup.Options{Root: root, Tenant: tenant, IncludeAssignments: *assignments},
 		func(e backup.Event) {
 			if e.Done {
@@ -99,19 +112,25 @@ func Restore(args []string) int {
 		return 2
 	}
 
+	items, err := backupItems(*path, *categories)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 2
+	}
+	ctx, cancel := commandContext()
+	defer cancel()
 	cfg := config.Load()
-	c, _, err := connect(cfg)
+	c, _, err := connect(ctx, cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
 	}
 
-	items := backupItems(*path, *categories)
 	if len(items) == 0 {
 		fmt.Fprintln(os.Stderr, "nothing to restore")
 		return 1
 	}
-	results := syncer.Run(context.Background(), c, nil, items, *prefix, nil)
+	results := syncer.Run(ctx, c, nil, items, *prefix, nil)
 	ok, fail := 0, 0
 	for _, r := range results {
 		if r.Err != nil {
@@ -224,6 +243,13 @@ func Sync(args []string) int {
 		fmt.Fprintln(os.Stderr, "error: provide exactly one source: --from-backup <dir>, or TENUVAULT_SOURCE_* env vars for a live tenant")
 		return 2
 	}
+	types, err := syncTypes(*categories)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 2
+	}
+	ctx, cancel := commandContext()
+	defer cancel()
 
 	var (
 		items          []syncer.Item
@@ -231,24 +257,34 @@ func Sync(args []string) int {
 		sourceTenantID string
 	)
 	if *fromBackup != "" {
-		items = backupItems(*fromBackup, *categories)
+		items, err = backupItems(*fromBackup, *categories)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			return 2
+		}
 		// The manifest records which tenant the backup came from; used below to
 		// refuse an accidental same-tenant duplicate without a prefix.
-		if data, err := os.ReadFile(filepath.Join(*fromBackup, "metadata.json")); err == nil {
-			var meta store.Metadata
-			if json.Unmarshal(data, &meta) == nil {
-				sourceTenantID = meta.TenantID
+		if !*dryRun {
+			data, readErr := os.ReadFile(filepath.Join(*fromBackup, "metadata.json"))
+			if readErr != nil {
+				fmt.Fprintln(os.Stderr, "error: read backup metadata:", readErr)
+				return 2
 			}
+			var meta store.Metadata
+			if err := json.Unmarshal(data, &meta); err != nil {
+				fmt.Fprintln(os.Stderr, "error: decode backup metadata:", err)
+				return 2
+			}
+			sourceTenantID = meta.TenantID
 		}
 	} else {
-		c, tenant, err := connect(srcCfg)
+		c, tenant, err := connect(ctx, srcCfg)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error: source auth failed:", err)
 			return 1
 		}
 		source, sourceTenantID = c, tenant.ID
-		ctx := context.Background()
-		for _, pt := range syncTypes(*categories) {
+		for _, pt := range types {
 			raws, err := c.ListAll(ctx, pt.Version, pt.ListPath, nil)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: list %s: %v\n", pt.Key, err)
@@ -273,7 +309,7 @@ func Sync(args []string) int {
 		return 0
 	}
 
-	target, targetTenant, err := connect(config.Load())
+	target, targetTenant, err := connect(ctx, config.Load())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error: target auth failed:", err)
 		return 1
@@ -283,7 +319,7 @@ func Sync(args []string) int {
 		return 2
 	}
 
-	results := syncer.Run(context.Background(), target, source, items, *prefix, nil)
+	results := syncer.Run(ctx, target, source, items, *prefix, nil)
 	ok, fail := 0, 0
 	for _, r := range results {
 		if r.Err != nil {
@@ -328,7 +364,7 @@ func sourceConfigFromEnv() (config.Config, bool) {
 
 // syncTypes resolves the policy types eligible for sync: the requested keys
 // (or every type when unset), restricted to restore-supported ones.
-func syncTypes(csv string) []catalog.PolicyType {
+func syncTypes(csv string) ([]catalog.PolicyType, error) {
 	var out []catalog.PolicyType
 	if strings.TrimSpace(csv) == "" {
 		for _, pt := range catalog.All() {
@@ -336,14 +372,21 @@ func syncTypes(csv string) []catalog.PolicyType {
 				out = append(out, pt)
 			}
 		}
-		return out
+		return out, nil
 	}
-	for _, pt := range selectedTypes(csv) {
+	selected, err := selectedTypes(csv)
+	if err != nil {
+		return nil, err
+	}
+	for _, pt := range selected {
 		if pt.RestoreSupported {
 			out = append(out, pt)
 		}
 	}
-	return out
+	if len(out) == 0 {
+		return nil, fmt.Errorf("none of the requested categories support restore or sync")
+	}
+	return out, nil
 }
 
 // filterByNames keeps only items whose display name is in the comma-separated
@@ -366,7 +409,7 @@ func filterByNames(items []syncer.Item, csv string) []syncer.Item {
 }
 
 // selectedTypes resolves a comma-separated key list, defaulting to verified.
-func selectedTypes(csv string) []catalog.PolicyType {
+func selectedTypes(csv string) ([]catalog.PolicyType, error) {
 	if strings.TrimSpace(csv) == "" {
 		var out []catalog.PolicyType
 		for _, pt := range catalog.All() {
@@ -374,28 +417,42 @@ func selectedTypes(csv string) []catalog.PolicyType {
 				out = append(out, pt)
 			}
 		}
-		return out
+		return out, nil
 	}
 	var out []catalog.PolicyType
+	var unknown []string
 	for _, k := range strings.Split(csv, ",") {
-		if pt, ok := catalog.ByKey(strings.TrimSpace(k)); ok {
+		k = strings.TrimSpace(k)
+		if pt, ok := catalog.ByKey(k); ok {
 			out = append(out, pt)
+		} else {
+			unknown = append(unknown, k)
 		}
 	}
-	return out
+	if len(unknown) > 0 {
+		return nil, fmt.Errorf("unknown category keys: %s", strings.Join(unknown, ", "))
+	}
+	return out, nil
 }
 
 // backupItems builds restore items from a backup folder, restricted to
 // restore-supported categories (and an optional key filter).
-func backupItems(path, csv string) []syncer.Item {
+func backupItems(path, csv string) ([]syncer.Item, error) {
 	b := store.Backup{Path: path}
 	allow := map[string]bool{}
-	for _, pt := range selectedTypes(csv) {
+	selected, err := selectedTypes(csv)
+	if err != nil {
+		return nil, err
+	}
+	for _, pt := range selected {
 		allow[pt.Category] = true
 	}
 	filtering := strings.TrimSpace(csv) != ""
 
-	cats, _ := b.Categories()
+	cats, err := b.Categories()
+	if err != nil {
+		return nil, fmt.Errorf("list backup categories: %w", err)
+	}
 	var items []syncer.Item
 	for _, cat := range cats {
 		if !catalog.CategoryRestoreSupported(cat) {
@@ -404,10 +461,13 @@ func backupItems(path, csv string) []syncer.Item {
 		if filtering && !allow[cat] {
 			continue
 		}
-		files, _ := b.Policies(cat)
+		files, err := b.Policies(cat)
+		if err != nil {
+			return nil, fmt.Errorf("list policies in %s: %w", cat, err)
+		}
 		for _, f := range files {
 			items = append(items, syncer.Item{Category: cat, Name: f.Name, Path: f.Path})
 		}
 	}
-	return items
+	return items, nil
 }

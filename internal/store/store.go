@@ -7,12 +7,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ugurkocde/TenuVault-TUI/internal/fileutil"
 )
 
 // Metadata is the backup manifest, matching the TenuVault portal runbook shape.
@@ -62,8 +66,16 @@ func List(root string) ([]Backup, error) {
 			continue
 		}
 		b := Backup{Folder: e.Name(), Path: filepath.Join(root, e.Name())}
-		if data, err := os.ReadFile(filepath.Join(b.Path, "metadata.json")); err == nil {
-			_ = json.Unmarshal(data, &b.Meta)
+		data, err := os.ReadFile(filepath.Join(b.Path, "metadata.json"))
+		if os.IsNotExist(err) {
+			backups = append(backups, b)
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read metadata for %s: %w", b.Folder, err)
+		}
+		if err := json.Unmarshal(data, &b.Meta); err != nil {
+			return nil, fmt.Errorf("decode metadata for %s: %w", b.Folder, err)
 		}
 		backups = append(backups, b)
 	}
@@ -141,7 +153,7 @@ func WriteChecksums(dir string, files map[string]string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, ChecksumsFile), data, 0o644)
+	return fileutil.WriteFileAtomic(filepath.Join(dir, ChecksumsFile), data, 0o644)
 }
 
 // ReadChecksums loads the integrity sidecar of a backup folder.
@@ -197,9 +209,15 @@ func Verify(dir string) (VerifyReport, error) {
 	// A policy file on disk that was never recorded means the backup was
 	// altered after it was written.
 	b := Backup{Path: dir}
-	cats, _ := b.Categories()
+	cats, err := b.Categories()
+	if err != nil {
+		return rep, fmt.Errorf("list backup categories: %w", err)
+	}
 	for _, cat := range cats {
-		files, _ := b.Policies(cat)
+		files, err := b.Policies(cat)
+		if err != nil {
+			return rep, fmt.Errorf("list policies in %s: %w", cat, err)
+		}
 		for _, f := range files {
 			if _, ok := c.Files[cat+"/"+f.Name+".json"]; !ok {
 				rep.Extra = append(rep.Extra, cat+"/"+f.Name+".json")
@@ -224,16 +242,37 @@ func Cleanup(root string, days int) (int, error) {
 	}
 	cutoff := time.Now().AddDate(0, 0, -days)
 	removed := 0
+	var removeErrs []error
 	for _, b := range backups {
-		ts, err := time.Parse("2006-01-02-150405", strings.TrimPrefix(b.Folder, "backup-"))
+		ts, err := backupFolderTime(b.Folder)
 		if err != nil {
 			continue
 		}
 		if ts.Before(cutoff) {
 			if err := os.RemoveAll(b.Path); err == nil {
 				removed++
+			} else {
+				removeErrs = append(removeErrs, fmt.Errorf("remove %s: %w", b.Folder, err))
 			}
 		}
 	}
-	return removed, nil
+	return removed, errors.Join(removeErrs...)
+}
+
+func backupFolderTime(folder string) (time.Time, error) {
+	raw := strings.TrimPrefix(folder, "backup-")
+	if ts, err := time.Parse("2006-01-02-150405.000000000", raw); err == nil {
+		return ts, nil
+	}
+	if dot := strings.IndexByte(raw, '.'); dot >= 0 {
+		if dash := strings.LastIndexByte(raw, '-'); dash > dot {
+			if _, err := strconv.Atoi(raw[dash+1:]); err == nil {
+				raw = raw[:dash]
+				if ts, err := time.Parse("2006-01-02-150405.000000000", raw); err == nil {
+					return ts, nil
+				}
+			}
+		}
+	}
+	return time.Parse("2006-01-02-150405", raw)
 }

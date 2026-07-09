@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/cli"
 	"github.com/ugurkocde/TenuVault-TUI/internal/config"
@@ -29,6 +30,12 @@ func main() {
 			os.Exit(cli.Verify(os.Args[2:]))
 		case "sync":
 			os.Exit(cli.Sync(os.Args[2:]))
+		default:
+			if !strings.HasPrefix(os.Args[1], "-") {
+				fmt.Fprintf(os.Stderr, "error: unknown command %q\n", os.Args[1])
+				fmt.Fprintln(os.Stderr, "usage: tenuvault [backup|restore|compare|verify|sync] [options]")
+				os.Exit(2)
+			}
 		}
 	}
 
