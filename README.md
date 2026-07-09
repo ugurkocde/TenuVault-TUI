@@ -2,11 +2,12 @@
 
 <p align="center">
   Back up, restore, compare, and sync Microsoft Intune configuration<br>
-  from a single terminal binary — no PowerShell, no cloud setup.
+  from a single terminal binary - no PowerShell scripting, no cloud setup.
 </p>
 
 <p align="center">
   <a href="https://github.com/ugurkocde/TenuVault-TUI/releases/latest"><img src="https://img.shields.io/github/v/release/ugurkocde/TenuVault-TUI?sort=semver" alt="Latest release"></a>
+  <a href="https://www.powershellgallery.com/packages/TenuVault-TUI"><img src="https://img.shields.io/powershellgallery/v/TenuVault-TUI?label=PSGallery" alt="PowerShell Gallery"></a>
   <a href="https://github.com/ugurkocde/TenuVault-TUI/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/ugurkocde/TenuVault-TUI/ci.yml?branch=main&label=ci" alt="CI"></a>
   <a href="go.mod"><img src="https://img.shields.io/github/go-mod/go-version/ugurkocde/TenuVault-TUI" alt="Go version"></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey" alt="Platforms">
@@ -57,8 +58,11 @@ Built with Go and the [Charm](https://charm.land) stack (Bubble Tea, Lip Gloss).
 - **Tenant-to-tenant sync.** Promote policies from one tenant to another (e.g.
   dev to prod) from a live tenant or a saved backup. Create-only — it never
   overwrites existing policies.
-- **Signed and notarized.** macOS builds are Developer ID-signed and Apple-
-  notarized; install via Homebrew, `.pkg`, `.dmg`, or a raw binary.
+- **One-command installs.** macOS via Homebrew (Developer ID-signed and
+  Apple-notarized `.pkg`/`.dmg` also available), Windows via
+  `Install-Module TenuVault-TUI` from the
+  [PowerShell Gallery](https://www.powershellgallery.com/packages/TenuVault-TUI),
+  Linux via `.deb`/`.rpm`.
 - **Scriptable.** `backup`, `restore`, `compare`, `verify`, and `sync`
   subcommands run headless for CI and scheduling. Mouse, scrollbars, and
   keyboard navigation throughout.
@@ -87,8 +91,9 @@ or use the raw binary/tarball.
 sudo dpkg -i tenuvault_*_linux_amd64.deb    # or: sudo rpm -i tenuvault_*_linux_amd64.rpm
 ```
 
-**Windows (PowerShell Gallery):** install the module, which bundles the 64-bit
-binary and launches it - same terminal UI, nothing to download separately.
+**Windows (PowerShell Gallery, recommended):** install the module, which bundles
+the 64-bit binary and launches it - same terminal UI, nothing to download
+separately.
 
 ```powershell
 Install-Module TenuVault-TUI -Scope CurrentUser
