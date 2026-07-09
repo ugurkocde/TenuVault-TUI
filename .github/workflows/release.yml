@@ -106,3 +106,15 @@ jobs:
           # step ran), then re-upload the updated file alongside them.
           (cd dist-macos && shasum -a 256 ./*.dmg ./*.pkg | sed 's|\./||') >> dist/checksums.txt
           gh release upload "$GITHUB_REF_NAME" dist-macos/*.dmg dist-macos/*.pkg dist/checksums.txt --clobber
+
+  psgallery:
+    # Publishes the Windows-only PowerShell Gallery module (see psgallery.yml,
+    # which is also manually dispatchable to backfill an existing release).
+    # Prerelease tags (v1.4.0-rc1) are skipped: ModuleVersion must be a plain
+    # System.Version.
+    needs: goreleaser
+    if: ${{ !contains(github.ref_name, '-') }}
+    uses: ./.github/workflows/psgallery.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets: inherit

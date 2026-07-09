@@ -1,0 +1,2 @@
+# tenuvault.exe is placed here by scripts/build-psmodule.ps1 at release time.
+# The binary itself is not committed (see .gitignore).

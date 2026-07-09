@@ -40,3 +40,27 @@ jobs:
           for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
             GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build ./... || exit 1
           done
+
+  psmodule:
+    # Validates the PowerShell Gallery module (manifest + packaging script) so
+    # errors surface on PRs rather than during a tagged release. Uses a dummy
+    # binary; the real one is only bundled by the release workflow.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage and validate module
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Content -Path "$env:RUNNER_TEMP/tenuvault.exe" -Value 'dummy'
+          ./scripts/build-psmodule.ps1 -Version v0.0.1 -ExePath "$env:RUNNER_TEMP/tenuvault.exe"
+
+      - name: Lint module with PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $results = Invoke-ScriptAnalyzer -Path ./powershell/TenuVault-TUI -Recurse -Severity Warning
+          $results | Format-Table -AutoSize | Out-String | Write-Host
+          if ($results) { throw "PSScriptAnalyzer reported $($results.Count) finding(s)." }

@@ -12,3 +12,6 @@
 
 # GoReleaser macOS DMG/PKG output
 dist-macos/
+
+# Bundled binary for the PowerShell Gallery module (added at release time)
+/powershell/TenuVault-TUI/bin/*.exe

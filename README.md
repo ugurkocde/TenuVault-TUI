@@ -87,10 +87,23 @@ or use the raw binary/tarball.
 sudo dpkg -i tenuvault_*_linux_amd64.deb    # or: sudo rpm -i tenuvault_*_linux_amd64.rpm
 ```
 
-**Windows:** download `tenuvault_*_windows_amd64.zip` (amd64 / arm64), extract,
-and run `tenuvault.exe`. The binary is currently unsigned, so Windows may show a
-SmartScreen prompt — choose "More info" then "Run anyway". A `winget` package is
-in progress.
+**Windows (PowerShell Gallery):** install the module, which bundles the 64-bit
+binary and launches it - same terminal UI, nothing to download separately.
+
+```powershell
+Install-Module TenuVault-TUI -Scope CurrentUser
+tenuvault
+```
+
+`tenuvault` forwards all arguments to the binary, so the headless subcommands
+(`backup`, `restore`, `compare`, `verify`, `sync`) and flags work unchanged. The
+terminal UI needs an interactive console (Windows Terminal or `pwsh`); it does
+not run in the PowerShell ISE.
+
+**Windows (direct download):** download `tenuvault_*_windows_amd64.zip` (amd64 /
+arm64), extract, and run `tenuvault.exe`. The binary is currently unsigned, so
+Windows may show a SmartScreen prompt - choose "More info" then "Run anyway". A
+`winget` package is in progress.
 
 **With Go:**
 

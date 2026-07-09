@@ -1,0 +1,69 @@
+name: psgallery
+
+# Publishes the Windows-only PowerShell Gallery module for a given release tag,
+# bundling the amd64 binary GoReleaser attached to that release (verified
+# against checksums.txt). Called by the release workflow on tag push, and
+# manually dispatchable to backfill an existing release:
+#
+#   gh workflow run psgallery.yml -f tag=v1.4.0
+#
+# Always stages and validates the module; the publish itself is skipped unless
+# the PSGALLERY_API_KEY secret is set.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to publish (e.g. v1.4.0)"
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download release binary and verify checksum
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:TAG
+          $ver = $tag.TrimStart('v')
+          $zip = "tenuvault_${ver}_windows_amd64.zip"
+          gh release download $tag --repo "$env:GITHUB_REPOSITORY" `
+            --pattern $zip --pattern checksums.txt --dir dl
+          $expected = ((@(Select-String -Path dl/checksums.txt -SimpleMatch -Pattern $zip)[0].Line) -split '\s+')[0].ToLower()
+          $actual = (Get-FileHash "dl/$zip" -Algorithm SHA256).Hash.ToLower()
+          if ($expected -ne $actual) { throw "Checksum mismatch for ${zip}: expected $expected, got $actual" }
+          Expand-Archive "dl/$zip" -DestinationPath dl/extracted -Force
+          "EXE_PATH=dl/extracted/tenuvault.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build and publish module
+        env:
+          PSGALLERY_API_KEY: ${{ secrets.PSGALLERY_API_KEY }}
+          TAG: ${{ inputs.tag }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Stage + validate always; publish only when the API key is configured.
+          $publishArgs = @{}
+          if ($env:PSGALLERY_API_KEY) {
+            $publishArgs.ApiKey = $env:PSGALLERY_API_KEY
+          }
+          else {
+            Write-Host "PSGALLERY_API_KEY not set; staging and validating only, skipping publish."
+          }
+          ./scripts/build-psmodule.ps1 -Version $env:TAG -ExePath "$env:EXE_PATH" @publishArgs

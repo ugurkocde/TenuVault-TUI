@@ -1,11 +1,13 @@
 # Release secrets
 
 The release pipeline (`.github/workflows/release.yml` + `.goreleaser.yaml`) runs
-on a tag push (`v*`), on a **macOS runner** (needed to build the DMG/PKG). It
-works with **no secrets** — it just produces unsigned binaries and skips the
-Homebrew tap. Add the GitHub repository secrets below
+on a tag push (`v*`). The main build job runs on a **macOS runner** (needed to
+build the DMG/PKG); a follow-up job on a **Windows runner** stages the
+PowerShell Gallery module. It works with **no secrets** — it just produces
+unsigned binaries and skips the Homebrew tap and gallery publish. Add the GitHub
+repository secrets below
 (Settings → Secrets and variables → Actions → New repository secret) to ship
-signed/notarized macOS artifacts and a Homebrew tap.
+signed/notarized macOS artifacts, a Homebrew tap, and the gallery module.
 
 Tiers, smallest to largest:
 - **5 base secrets** (`MACOS_SIGN_*`, `MACOS_NOTARY_*`) → signed + notarized
@@ -91,6 +93,34 @@ On the next release, a PR is opened against `microsoft/winget-pkgs`; Microsoft's
 validation runs and a maintainer merges it (can take a few days). After that,
 `winget install UgurLabs.TenuVault` works. If `WINGET_TOKEN` is unset, the winget
 step is skipped automatically.
+
+## PowerShell Gallery (optional)
+
+Publishes the Windows-only module so admins can `Install-Module TenuVault-TUI`.
+The `psgallery` job runs on a Windows runner after `goreleaser`, downloads the
+`windows_amd64` binary from the release, verifies it against `checksums.txt`,
+bundles it, and publishes.
+
+1. Create a PowerShell Gallery account and an API key at
+   https://www.powershellgallery.com/account/apikeys (scope it to push new
+   packages/versions for `TenuVault-TUI`).
+2. Add the repository secret:
+
+| Secret | What it is |
+| --- | --- |
+| `PSGALLERY_API_KEY` | PowerShell Gallery API key with push rights for the `TenuVault-TUI` package. |
+
+The **first** publish claims the `TenuVault-TUI` name on the gallery; subsequent
+tags publish new versions automatically. If `PSGALLERY_API_KEY` is unset, the
+module is staged and validated but not published. The module bundles only the
+64-bit (amd64) binary; Windows on ARM64 runs it via x64 emulation.
+
+To publish the module for a release that already exists (e.g. after adding the
+key), dispatch the workflow manually:
+
+```sh
+gh workflow run psgallery.yml -f tag=v1.4.0
+```
 
 ## Windows signing (later)
 
