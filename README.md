@@ -1,8 +1,8 @@
 <h1 align="center">TenuVault TUI</h1>
 
 <p align="center">
-  Back up, restore, compare, and sync Microsoft Intune configuration<br>
-  from a single terminal binary - no PowerShell scripting, no cloud setup.
+  Back up, verify, compare, restore, and sync Microsoft Intune configuration<br>
+  from one terminal application.
 </p>
 
 <p align="center">
@@ -14,298 +14,251 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
 </p>
 
-<!-- SCREENSHOT: drop your capture at docs/screenshot.png (PNG, ~1200px wide).
-     It renders here as the hero image. A shot of the dashboard works best. -->
 <p align="center">
   <img src="docs/screenshot.png" alt="TenuVault TUI dashboard" width="820">
 </p>
 
-TenuVault TUI signs in to Microsoft Graph, backs up your Intune policies to local
-TenuVault-format folders, compares backups for drift, restores policies back to a
-tenant, and syncs policies from one tenant to another — all from one binary.
-Built with Go and the [Charm](https://charm.land) stack (Bubble Tea, Lip Gloss).
+TenuVault stores portable, per-policy JSON backups locally. It supports 27
+Intune policy types, interactive or app-registration authentication, offline
+integrity/drift checks, create-only restore, and live or backup-based tenant
+sync. It is a single Go binary with no database or service to deploy.
 
-## Contents
+## What it does
 
-- [Highlights](#highlights)
-- [Install](#install)
-- [Usage](#usage)
-- [Coverage](#coverage)
-- [Headless (automation / CI)](#headless-automation--ci)
-- [Tenant sync](#tenant-sync)
-- [Permissions](#permissions)
-- [Configuration](#configuration)
-- [Security](#security)
-- [Backup format](#backup-format)
-- [Development](#development)
-- [License](#license)
+- Captures full policy content, including scripts, Settings Catalog settings,
+  Administrative Template definition/presentation values, security-baseline
+  intent settings, and optional assignments.
+- Records `metadata.json`, a human-readable log, and SHA-256 checksums; detects
+  modified, missing, and untracked files with `tenuvault verify`.
+- Compares two backups with stable, severity-ranked drift output.
+- Restores and syncs by creating new objects only; existing tenant objects are
+  not overwritten.
+- Copies policies from a saved backup or a connected source tenant to a target
+  tenant, with whole-type and individual-policy selection.
+- Reports partial content, missing permissions, Graph errors, and filesystem
+  failures instead of silently dropping data.
+- Runs interactively with keyboard/mouse support or headlessly for automation.
 
-## Highlights
+## Install and update
 
-- **One self-contained binary.** Sign in with your browser (delegated, no app
-  registration required) or with an app registration (client secret or
-  certificate) entered right in the UI. Device code sign-in is intentionally not
-  supported (phishing risk).
-- **Full backups.** 27 Intune policy types to portable, per-policy JSON — script
-  bodies, settings-catalog values, administrative-template definition values, and
-  security-baseline intent settings are all fetched in full, with a
-  `metadata.json` manifest and a `backup.log`.
-- **Honest results.** Every category reports `Success`, `CompletedWithWarnings`,
-  or `Failed` with the exact Graph error (e.g. a missing scope) — no silent drops.
-- **Restore that never overwrites.** Dry-run preview, explicit confirmation, and
-  a `[Restored]` name prefix. Conditional Access policies are restored disabled.
-- **Drift comparison.** Compare any two backups with severity highlighting.
-- **Tenant-to-tenant sync.** Promote policies from one tenant to another (e.g.
-  dev to prod) from a live tenant or a saved backup. Create-only — it never
-  overwrites existing policies.
-- **One-command installs.** macOS via Homebrew (Developer ID-signed and
-  Apple-notarized `.pkg`/`.dmg` also available), Windows via
-  `Install-Module TenuVault-TUI` from the
-  [PowerShell Gallery](https://www.powershellgallery.com/packages/TenuVault-TUI),
-  Linux via `.deb`/`.rpm`.
-- **Scriptable.** `backup`, `restore`, `compare`, `verify`, and `sync`
-  subcommands run headless for CI and scheduling. Mouse, scrollbars, and
-  keyboard navigation throughout.
-- **Verifiable backups.** Every backup records a SHA-256 checksum per policy
-  file; `tenuvault verify` (or `v` in the TUI) detects corrupted or tampered
-  backups.
-
-## Install
-
-**Homebrew (macOS, recommended):**
-
-```sh
-brew install ugurkocde/UgurLabs/tenuvault
-```
-
-**macOS installers:** download a signed, notarized `.pkg` (installs `tenuvault`
-to `/usr/local/bin`) or `.dmg` from the
-[latest release](https://github.com/ugurkocde/TenuVault-TUI/releases/latest).
-Both are Apple-notarized, so they open without Gatekeeper warnings.
-
-**Linux:** download the `.deb` (Debian/Ubuntu) or `.rpm` (Fedora/RHEL) for your
-architecture from the [latest release](https://github.com/ugurkocde/TenuVault-TUI/releases/latest),
-or use the raw binary/tarball.
-
-```sh
-sudo dpkg -i tenuvault_*_linux_amd64.deb    # or: sudo rpm -i tenuvault_*_linux_amd64.rpm
-```
-
-**Windows (PowerShell Gallery, recommended):** install the module, which bundles
-the 64-bit binary and launches it - same terminal UI, nothing to download
-separately.
+### Windows — PowerShell Gallery (recommended)
 
 ```powershell
 Install-Module TenuVault-TUI -Scope CurrentUser
 tenuvault
+
+# Later, update an Install-Module installation:
+Update-Module TenuVault-TUI
 ```
 
-`tenuvault` forwards all arguments to the binary, so the headless subcommands
-(`backup`, `restore`, `compare`, `verify`, `sync`) and flags work unchanged. The
-terminal UI needs an interactive console (Windows Terminal or `pwsh`); it does
-not run in the PowerShell ISE.
+Open a new PowerShell session after updating, then confirm the bundled binary:
 
-**Windows (direct download):** download `tenuvault_*_windows_amd64.zip` (amd64 /
-arm64), extract, and run `tenuvault.exe`. The binary is currently unsigned, so
-Windows may show a SmartScreen prompt - choose "More info" then "Run anyway". A
-`winget` package is in progress.
+```powershell
+Get-InstalledModule TenuVault-TUI       # PowerShellGet
+# Get-InstalledPSResource TenuVault-TUI # PSResourceGet
+tenuvault --version
+```
 
-**With Go:**
+If you installed with PSResourceGet instead, use
+`Update-PSResource TenuVault-TUI`. Package-manager updates do not apply to a
+manually downloaded ZIP. The module requires 64-bit Windows, works in Windows
+PowerShell 5.1 and PowerShell 7+, and runs on Windows ARM64 through x64
+emulation. Use Windows Terminal, `pwsh`, or a console window for the TUI; the
+PowerShell ISE supports headless commands only.
+
+### macOS
 
 ```sh
-go install github.com/ugurkocde/TenuVault-TUI@latest
+brew install ugurkocde/UgurLabs/tenuvault
+brew upgrade tenuvault
 ```
 
-**From source:**
+Signed and notarized Apple Silicon `.pkg` and `.dmg` installers are also
+available from the [latest release](https://github.com/ugurkocde/TenuVault-TUI/releases/latest).
+
+### Linux
+
+Download the package for your architecture from the
+[latest release](https://github.com/ugurkocde/TenuVault-TUI/releases/latest):
 
 ```sh
-git clone https://github.com/ugurkocde/TenuVault-TUI.git
-cd TenuVault-TUI
-go build -o tenuvault .
+sudo dpkg -i tenuvault_*_linux_amd64.deb
+# or
+sudo rpm -i tenuvault_*_linux_amd64.rpm
 ```
 
-## Usage
+ARM64 DEB/RPM packages and raw tarballs are also published.
+
+### Other options
+
+- Windows ZIPs: `tenuvault_*_windows_amd64.zip` and
+  `tenuvault_*_windows_arm64.zip` (unsigned; SmartScreen may prompt).
+- Go: `go install github.com/ugurkocde/TenuVault-TUI@latest`
+- Source: clone the repository and run `go build -o tenuvault .`
+
+## Quick start
 
 ```sh
 tenuvault
 ```
 
-On first run, choose a sign-in method: interactive (opens your browser) or app
-registration (enter tenant id, client id, and a client secret or certificate
-path in the form). After signing in, the dashboard shows your tenant and last
-backup.
+Choose interactive browser sign-in, client secret, or certificate. Interactive
+sign-in needs no custom app registration. Device-code flow is intentionally not
+supported because of its phishing risk.
 
-Flags:
+Interactive-launch flags:
 
-| Flag           | Description                                   |
-| -------------- | --------------------------------------------- |
-| `-tenant`      | Tenant id or domain (overrides config)        |
-| `-backup-root` | Directory to store backups (overrides config) |
-| `-version`     | Print version and exit                        |
+| Flag | Purpose |
+| --- | --- |
+| `-tenant <id-or-domain>` | Override the configured tenant |
+| `-backup-root <path>` | Override the backup directory |
+| `-version` | Print the binary version |
 
-Keys: `b` back up, `l` browse, `d` compare, `r` restore, `y` sync, `t` tenants,
-`s` settings, arrow keys / `j` `k` to move, `space` to toggle, `/` to filter
-long lists, `s` to sort them by name, `enter` to select, `esc` to go back, `q`
-to quit, `?` for help. On the compare and restore/sync result screens, `e`
-exports the details as a JSON report into the backup root. On a backup's
-detail screen, `v` verifies its files against the recorded checksums. While a
-backup is running, `x` cancels it and keeps what was already written. The
-mouse works too — click a list row to select it and scroll with the wheel.
+Main keys: `b` backup, `l` browse, `d` compare, `r` restore, `y` sync, `t`
+tenants, `s` settings, arrows/`j`/`k` move, `space` toggles, `/` filters, `s`
+sorts a list, `enter` selects, `esc` goes back, `q` quits, and `?` opens help.
+Use `v` to verify a selected backup, `e` to export comparison/restore/sync
+results as JSON, and `x` to cancel an active operation. The mouse and wheel are
+supported.
 
-## Coverage
+## Policy coverage
 
-Configuration (device configurations, settings catalog, administrative
-templates, compliance, endpoint security baselines), scripts (Windows, macOS
-shell, proactive remediations, custom attributes), enrollment and updates
-(Autopilot, enrollment configurations, feature/quality/driver updates), tenant
-administration (scope tags, device categories, terms and conditions,
-notification templates, assignment filters), apps (app configuration, app
-protection for iOS/Android/Windows, Windows information protection, app
-categories), and conditional access.
+All 27 registered types are backed up and restorable. Values below are the keys
+accepted by `--categories`.
 
-All 27 types are restorable. Administrative templates and endpoint-security
-baselines use multi-part creates (the policy plus its settings, applied via
-`updateDefinitionValues` / `createInstance`); enrollment configurations restore
-best-effort (default/singleton configs can't be recreated).
+| Area | Policy type keys |
+| --- | --- |
+| Configuration | `deviceConfigurations`, `configurationPolicies`, `groupPolicyConfigurations`, `compliancePolicies`, `intents` |
+| Scripts | `deviceManagementScripts`, `deviceShellScripts`, `deviceHealthScripts`, `customAttributeScripts` |
+| Enrollment and updates | `autopilotProfiles`, `enrollmentConfigurations`, `featureUpdateProfiles`, `qualityUpdateProfiles`, `driverUpdateProfiles` |
+| Tenant administration | `roleScopeTags`, `deviceCategories`, `termsAndConditions`, `notificationTemplates`, `assignmentFilters` |
+| Apps | `appConfigDevice`, `appConfigManaged`, `iosAppProtection`, `androidAppProtection`, `windowsAppProtection`, `windowsInformationProtection`, `appCategories` |
+| Identity | `conditionalAccess` |
 
-## Headless (automation / CI)
+Enrollment configurations restore best-effort because default/singleton
+configurations cannot be recreated. Administrative Templates and endpoint
+security baselines use their required multi-step Graph create actions.
 
-`backup`, `restore`, `compare`, `verify`, and `sync` run without the TUI for
-scheduling and pipelines. Commands that talk to a tenant use app-registration
-credentials (interactive sign-in needs a browser); `compare` and `verify` work
-entirely offline:
+## Headless automation
+
+Tenant-connected commands use app-registration credentials. Client-secret
+example:
 
 ```sh
-export AZURE_TENANT_ID=...   AZURE_CLIENT_ID=...   AZURE_CLIENT_SECRET=...
+export AZURE_TENANT_ID=... AZURE_CLIENT_ID=... AZURE_CLIENT_SECRET=...
 
 tenuvault backup --out ./backups --assignments
 tenuvault backup --categories deviceConfigurations,compliancePolicies
-tenuvault restore --backup ./backups/backup-2026-06-27-020000 --prefix "[Restored] "
-tenuvault compare ./backups/backup-2026-06-26-020000 ./backups/backup-2026-06-27-020000
-tenuvault verify ./backups/backup-2026-06-27-020000
+tenuvault restore --backup ./backups/backup-... --prefix "[Restored] "
+tenuvault compare ./backups/backup-old ./backups/backup-new
+tenuvault verify ./backups/backup-...
 ```
 
-`backup` exits non-zero if a backup fails; `restore` exits non-zero if any policy
-fails to create. `compare` prints one change per line and exits `0` when the
-backups match, `1` when drift is found, and `2` on a usage or read error, so a
-nightly job can gate on configuration drift. `verify` re-hashes every policy
-file against the `checksums.json` the backup recorded and exits `0` when intact,
-`1` on any mismatch/missing/extra file, and `2` when the backup has no checksums
-(written by an older version) or cannot be read.
+`compare` and `verify` are fully offline. Exit codes:
 
-`sync` copies policies into the target tenant (the `AZURE_*` credentials, same
-as `restore`). The source is either a saved backup or a second, live tenant
-supplied via `TENUVAULT_SOURCE_*` variables:
+| Command | Exit codes |
+| --- | --- |
+| `backup` | `0` completed, `1` failed, `2` invalid flags, `130` cancelled |
+| `restore`, `sync` | `0` all created, `1` operation/auth failure, `2` usage or invalid input |
+| `compare` | `0` no drift, `1` drift found, `2` usage/read error |
+| `verify` | `0` intact, `1` mismatch/missing/extra file, `2` usage/read/no-checksum error |
+
+### Headless tenant sync
+
+The target uses `AZURE_*`. Supply exactly one source: a backup or a second live
+tenant.
 
 ```sh
-# from a saved backup
-tenuvault sync --from-backup ./backups/backup-2026-06-27-020000 --prefix "[Synced] "
+# Saved backup source
+tenuvault sync --from-backup ./backups/backup-... --prefix "[Synced] "
 
-# from a live tenant (dev -> prod promotion)
-export TENUVAULT_SOURCE_TENANT_ID=... TENUVAULT_SOURCE_CLIENT_ID=... TENUVAULT_SOURCE_CLIENT_SECRET=...
-tenuvault sync --categories deviceConfigurations --names "Baseline BitLocker" --dry-run
-tenuvault sync --categories deviceConfigurations --names "Baseline BitLocker"
+# Live source tenant
+export TENUVAULT_SOURCE_TENANT_ID=...
+export TENUVAULT_SOURCE_CLIENT_ID=...
+export TENUVAULT_SOURCE_CLIENT_SECRET=...
+tenuvault sync --categories deviceConfigurations \
+  --names "Baseline BitLocker" --dry-run
+tenuvault sync --categories deviceConfigurations \
+  --names "Baseline BitLocker"
 ```
 
-`--dry-run` prints what would be created and writes nothing. `--names` narrows
-the selection to exact display names within the chosen categories. Syncing a
-backup into the tenant it came from is refused unless a `--prefix` is set (it
-would silently duplicate policies under their original names).
+For source-certificate auth use `TENUVAULT_SOURCE_CERT_PATH` and
+`TENUVAULT_SOURCE_CERT_PASSWORD`. `--names` is an exact-name filter;
+`--dry-run` lists planned creates without writing. A prefix-free sync is refused
+when source and target are the same tenant or the backup does not identify its
+source tenant.
 
-## Tenant sync
+## Restore and sync safety
 
-To copy policies between tenants, add each tenant under `Tenants` (`t`) — sign in
-interactively or with app credentials. Then choose `Sync to another tenant`
-(`y`), pick a source (a connected tenant or a saved backup), select whole types
-or drill in to pick individual policies, choose a target tenant, pick whether to
-keep the original name or add a prefix, and confirm.
+- Restore/sync creates new policies and does not patch or delete existing tenant
+  objects. The only delete is a compensating rollback of an incomplete
+  Administrative Template created by that same operation.
+- Restore defaults to `[Restored] `; sync defaults to `[Synced] `.
+- Conditional Access policies are created disabled.
+- Assignments are not copied because group IDs are tenant-specific. Backups made
+  with `--assignments` retain them read-only and add `groups.json` for auditing.
+- Failed enrichment is marked as partial content in results and exports.
 
-Sync is **create-only and never overwrites**: it only creates new policies in the
-target and never reads or modifies existing ones. Conditional Access arrives
-disabled, and assignments are not copied (group ids differ between tenants);
-with `--assignments`, backups still record them read-only, along with a
-`groups.json` mapping group ids to display names for auditing. The
-target sign-in needs write scopes (`DeviceManagement*.ReadWrite.All`). Tenant
-connections are remembered across launches (metadata only — no tokens or secrets
-are stored).
+## Microsoft Graph permissions
 
-## Permissions
-
-Interactive sign-in requests the scopes below explicitly, so the signed-in admin
-is prompted to consent to them in each tenant (the first tenant and any tenant
-you add for sync). App-only (secret/certificate) sign-in uses `.default` —
-consent those permissions on the app registration instead. The relevant scopes
-are:
+Interactive sign-in requests these delegated scopes. App-only authentication
+uses `.default`, so grant and admin-consent the corresponding application
+permissions on the app registration:
 
 - `DeviceManagementConfiguration.ReadWrite.All`
 - `DeviceManagementApps.ReadWrite.All`
 - `DeviceManagementServiceConfig.ReadWrite.All`
 - `DeviceManagementScripts.ReadWrite.All`
-- `DeviceManagementRBAC.ReadWrite.All` (scope tags)
+- `DeviceManagementRBAC.ReadWrite.All`
 - `Policy.ReadWrite.ConditionalAccess`
-- `Group.Read.All` (optional in effect: only used to label assignment group ids
-  with display names in `groups.json`; backups succeed without it and keep the
-  raw ids)
+- `Organization.Read.All`
+- `Group.Read.All` — optional for resolving assignment group names; raw IDs are
+  retained without it
 
-If a scope is missing, the affected category is reported as failed on the backup
-summary with the exact Graph error, so you can see what to consent.
+Missing access is reported against the affected category.
 
-## Configuration
+## Configuration, storage, and security
 
-Settings are stored at the OS config dir under `tenuvault/config.json` (for
-example `~/Library/Application Support/tenuvault/config.json` on macOS).
-Credentials are never written to disk — secrets are read from the environment:
+Non-secret settings and remembered tenant metadata are stored in the OS config
+directory under `tenuvault/config.json` (for example,
+`~/Library/Application Support/tenuvault/config.json` on macOS). Client secrets,
+certificate passwords, tokens, and browser credentials are not persisted.
 
-| Variable                            | Purpose                             |
-| ----------------------------------- | ----------------------------------- |
-| `AZURE_TENANT_ID`                   | Target tenant                       |
-| `AZURE_CLIENT_ID`                   | Custom app registration (optional)  |
-| `AZURE_CLIENT_SECRET`               | Client secret (enables secret auth) |
-| `AZURE_CLIENT_CERTIFICATE_PASSWORD` | Certificate password (if encrypted) |
-| `TENUVAULT_SOURCE_TENANT_ID`        | Live source tenant for headless `sync` |
-| `TENUVAULT_SOURCE_CLIENT_ID`        | Source app registration for `sync`  |
-| `TENUVAULT_SOURCE_CLIENT_SECRET`    | Source client secret for `sync`     |
-| `TENUVAULT_SOURCE_CERT_PATH`        | Source certificate for `sync` (alternative to the secret) |
-| `TENUVAULT_SOURCE_CERT_PASSWORD`    | Source certificate password         |
+Target environment variables: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
+`AZURE_CLIENT_SECRET`, and `AZURE_CLIENT_CERTIFICATE_PASSWORD`. A target
+certificate path is selected in the authentication form and can be reused by
+headless commands through saved non-secret configuration.
 
-## Security
+Backups are written atomically under the configured root:
 
-- **No secrets on disk.** Client secrets and certificate passwords are read from
-  the environment and held only in memory; only non-sensitive connection
-  metadata (tenant id, client id, sign-in method) is persisted.
-- **No device code flow.** Removed deliberately to avoid device-code phishing.
-- **Restore and sync are create-only.** Nothing is ever patched or deleted in a
-  tenant; new policies use a `[Restored]` prefix by default and Conditional
-  Access is created disabled.
-- All Graph calls target the `beta` endpoint to cover the full policy surface.
-
-## Backup format
-
-```
-backup-YYYY-MM-DD-HHMMSS/
-  metadata.json
-  checksums.json                       # sha256 per policy file (tenuvault verify)
-  groups.json                          # assignment group id -> name (with --assignments)
-  DeviceConfigurations/<policy name>.json
-  CompliancePolicies/<policy name>.json
-  ConfigurationPolicies/<policy name>.json
+```text
+backup-YYYY-MM-DD-HHMMSS.NNNNNNNNN[-N]/
+  metadata.json        # written last; marks a complete backup
+  checksums.json       # SHA-256 per policy file
+  backup.log
+  groups.json          # only when assignment names were resolved
+  DeviceConfigurations/<policy>.json
+  CompliancePolicies/<policy>.json
   ...
 ```
 
-Each policy file is the verbatim Graph JSON (with API noise removed) so it
-restores cleanly and stays compatible with the TenuVault portal.
+Policy JSON keeps the Graph content needed for restore while removing API
+noise. Older second-precision backup-folder names remain supported. Incomplete
+folders without `metadata.json` are hidden from browsing and later removed by
+retention cleanup.
 
-## Development
+## Development and releases
 
 ```sh
-go build ./...
-go test ./...
+test -z "$(gofmt -l .)"
+go vet ./...
 go test -race ./...
+go build ./...
 ```
 
-CI runs formatting, `go vet`, race tests, and a cross-platform build on every
-push. Releases are cut by pushing a `v*` tag (see `SECRETS.md` for the signing
-and notarization setup).
+CI also lints and cross-builds Linux, macOS, and Windows targets. Pushing a
+`v*` tag runs GoReleaser, macOS signing/notarization, package publishing, and
+PowerShell Gallery validation/publication. See [SECRETS.md](SECRETS.md).
 
 ## License
 

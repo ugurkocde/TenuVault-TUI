@@ -18,9 +18,10 @@ function Invoke-TenuVault {
     .DESCRIPTION
         Runs the bundled tenuvault.exe. With no arguments it opens the interactive
         terminal UI. Any arguments are forwarded verbatim to the binary, so the
-        headless subcommands (backup, restore, compare, verify, sync) and flags
-        (--tenant, --backup-root, --version) work exactly as documented for the
-        standalone release. The binary's exit code is left in $LASTEXITCODE.
+        headless subcommands (backup, restore, compare, verify, sync) work exactly
+        as documented for the standalone release. Top-level flags (-tenant,
+        -backup-root, -version) apply when launching the interactive app. The
+        binary's exit code is left in $LASTEXITCODE.
 
     .EXAMPLE
         Invoke-TenuVault
@@ -31,7 +32,7 @@ function Invoke-TenuVault {
         Prints the bundled binary version.
 
     .EXAMPLE
-        tenuvault backup --tenant contoso.onmicrosoft.com
+        tenuvault backup --out C:\Backups --assignments
         Runs a headless backup.
 
     .LINK
