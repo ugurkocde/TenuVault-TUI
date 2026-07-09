@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -514,7 +515,10 @@ func (m model) backupMatchesSyncTarget() (bool, error) {
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return false, err
 	}
-	return meta.TenantID != "" && meta.TenantID == m.conns[m.syncTargetConn].Tenant.ID, nil
+	if meta.TenantID == "" {
+		return false, fmt.Errorf("backup metadata does not identify its source tenant; choose a prefix")
+	}
+	return meta.TenantID == m.conns[m.syncTargetConn].Tenant.ID, nil
 }
 
 func allSelected(pols []syncPol) bool {

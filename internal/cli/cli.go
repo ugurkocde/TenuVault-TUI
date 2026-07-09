@@ -92,10 +92,18 @@ func Backup(args []string) int {
 		total += n
 	}
 	fmt.Printf("%s: %d policies in %s\n", res.Status, total, res.Path)
-	if res.Status == "Failed" {
+	return backupExitCode(res.Status)
+}
+
+func backupExitCode(status string) int {
+	switch status {
+	case "Cancelled":
+		return 130
+	case "Failed":
 		return 1
+	default:
+		return 0
 	}
-	return 0
 }
 
 // Restore runs a headless restore of a backup folder into the connected tenant.
@@ -117,6 +125,10 @@ func Restore(args []string) int {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 2
 	}
+	if len(items) == 0 {
+		fmt.Fprintln(os.Stderr, "nothing to restore")
+		return 1
+	}
 	ctx, cancel := commandContext()
 	defer cancel()
 	cfg := config.Load()
@@ -126,10 +138,6 @@ func Restore(args []string) int {
 		return 1
 	}
 
-	if len(items) == 0 {
-		fmt.Fprintln(os.Stderr, "nothing to restore")
-		return 1
-	}
 	results := syncer.Run(ctx, c, nil, items, *prefix, nil)
 	ok, fail := 0, 0
 	for _, r := range results {
@@ -314,9 +322,15 @@ func Sync(args []string) int {
 		fmt.Fprintln(os.Stderr, "error: target auth failed:", err)
 		return 1
 	}
-	if sourceTenantID != "" && sourceTenantID == targetTenant.ID && *prefix == "" {
-		fmt.Fprintln(os.Stderr, "error: source and target are the same tenant; refusing to duplicate policies without --prefix")
-		return 2
+	if *prefix == "" {
+		if sourceTenantID == "" {
+			fmt.Fprintln(os.Stderr, "error: backup source tenant is unknown; use --prefix to avoid unverified duplicates")
+			return 2
+		}
+		if sourceTenantID == targetTenant.ID {
+			fmt.Fprintln(os.Stderr, "error: source and target are the same tenant; refusing to duplicate policies without --prefix")
+			return 2
+		}
 	}
 
 	results := syncer.Run(ctx, target, source, items, *prefix, nil)

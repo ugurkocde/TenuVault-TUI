@@ -129,3 +129,9 @@ func TestBackupItemsReportsUnreadableBackup(t *testing.T) {
 		t.Fatal("missing backup should return an error")
 	}
 }
+
+func TestCancelledBackupUsesInterruptedExitCode(t *testing.T) {
+	if got := backupExitCode("Cancelled"); got != 130 {
+		t.Fatalf("exit=%d, want 130", got)
+	}
+}

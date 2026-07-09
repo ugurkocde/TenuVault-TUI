@@ -71,3 +71,20 @@ func TestEqualPolicyReportsReadFailure(t *testing.T) {
 		t.Fatal("missing policy file should return an error")
 	}
 }
+
+func TestCompareHandlesCategoryAddedOrRemoved(t *testing.T) {
+	root := t.TempDir()
+	older := writeBackup(t, root, "backup-old", map[string]map[string]string{
+		"OldOnly": {"old": `{"displayName":"old"}`},
+	})
+	newer := writeBackup(t, root, "backup-new", map[string]map[string]string{
+		"NewOnly": {"new": `{"displayName":"new"}`},
+	})
+	changes, err := Compare(older, newer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 2 {
+		t.Fatalf("changes=%+v, want one add and one removal", changes)
+	}
+}

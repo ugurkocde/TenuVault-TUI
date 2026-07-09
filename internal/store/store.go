@@ -68,8 +68,7 @@ func List(root string) ([]Backup, error) {
 		b := Backup{Folder: e.Name(), Path: filepath.Join(root, e.Name())}
 		data, err := os.ReadFile(filepath.Join(b.Path, "metadata.json"))
 		if os.IsNotExist(err) {
-			backups = append(backups, b)
-			continue
+			continue // metadata is written last and commits a complete backup
 		}
 		if err != nil {
 			return nil, fmt.Errorf("read metadata for %s: %w", b.Folder, err)

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
 	"github.com/ugurkocde/TenuVault-TUI/internal/graph"
@@ -229,7 +230,11 @@ func createGroupPolicy(ctx context.Context, c graph.API, pt catalog.PolicyType, 
 		return id, err
 	}
 	if _, err := c.Post(ctx, pt.Version, pt.ListPath+"/"+id+"/updateDefinitionValues", update); err != nil {
-		rollbackErr := c.Delete(ctx, pt.Version, pt.ListPath+"/"+id)
+		// A cancellation may be what interrupted the settings POST. Cleanup must
+		// therefore retain request values but have its own short deadline.
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer cancel()
+		rollbackErr := c.Delete(rollbackCtx, pt.Version, pt.ListPath+"/"+id)
 		if rollbackErr == nil {
 			return "", fmt.Errorf("policy settings failed to apply; newly created policy was rolled back: %w", err)
 		}

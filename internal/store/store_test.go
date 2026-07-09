@@ -12,7 +12,11 @@ func TestCleanup(t *testing.T) {
 	old := "backup-" + time.Now().AddDate(0, 0, -40).Format("2006-01-02-150405")
 	recent := "backup-" + time.Now().AddDate(0, 0, -2).Format("2006-01-02-150405")
 	for _, f := range []string{old, recent} {
-		if err := os.MkdirAll(filepath.Join(root, f), 0o755); err != nil {
+		dir := filepath.Join(root, f)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "metadata.json"), []byte(`{}`), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -52,5 +56,19 @@ func TestBackupFolderTimeSupportsUniqueSuffix(t *testing.T) {
 	}
 	if got.Nanosecond() != 123 {
 		t.Fatalf("nanoseconds=%d, want 123", got.Nanosecond())
+	}
+}
+
+func TestListSkipsBackupWithoutCommitManifest(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "backup-2026-07-09-120000"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	backups, err := List(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 0 {
+		t.Fatalf("backups=%v, want incomplete directory hidden", backups)
 	}
 }

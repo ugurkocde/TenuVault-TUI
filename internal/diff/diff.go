@@ -4,6 +4,8 @@
 package diff
 
 import (
+	"errors"
+	"io/fs"
 	"reflect"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/jsonutil"
@@ -102,6 +104,9 @@ func indexByName(b store.Backup, cat string) (map[string]string, error) {
 	out := map[string]string{}
 	files, err := b.Policies(cat)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return out, nil
+		}
 		return nil, err
 	}
 	for _, f := range files {

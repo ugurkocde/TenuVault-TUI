@@ -85,6 +85,20 @@ func TestCompletedBackgroundDiffDoesNotHijackNavigation(t *testing.T) {
 	}
 }
 
+func TestStaleDiffResultCannotReplaceActiveComparison(t *testing.T) {
+	m := New(testConfig(t))
+	m.screen = screenBrowse
+	m.diffLoading = true
+	m.diffGen = 2
+
+	next, _ := m.Update(diffDoneMsg{gen: 1})
+	got := next.(model)
+	if !got.diffLoading || got.screen != screenBrowse || len(got.diffChanges) != 0 {
+		t.Fatalf("stale result changed active flow: loading=%v screen=%v changes=%v",
+			got.diffLoading, got.screen, got.diffChanges)
+	}
+}
+
 func TestErrorReturnsToOriginatingScreen(t *testing.T) {
 	m := New(testConfig(t))
 	m.connected = true

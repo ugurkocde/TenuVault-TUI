@@ -40,7 +40,7 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
 		return err
 	}
 	closed = true
-	if err = os.Rename(tmpPath, path); err != nil {
+	if err = replaceFile(tmpPath, path); err != nil {
 		return err
 	}
 

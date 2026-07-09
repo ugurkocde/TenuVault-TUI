@@ -12,6 +12,16 @@ import (
 	"github.com/ugurkocde/TenuVault-TUI/internal/graphtest"
 )
 
+type cleanupContextFake struct {
+	*graphtest.Fake
+	deleteCtxErr error
+}
+
+func (f *cleanupContextFake) Delete(ctx context.Context, _, _ string) error {
+	f.deleteCtxErr = ctx.Err()
+	return nil
+}
+
 func TestCreateGroupPolicyMultiPart(t *testing.T) {
 	raw := []byte(`{
 		"id":"old-id","displayName":"ADM Test","description":"",
@@ -116,6 +126,26 @@ func TestCreateGroupPolicyReportsFailedRollback(t *testing.T) {
 	var partial *PartialCreateError
 	if id != "created-1" || !errors.As(err, &partial) || partial.PolicyID != id {
 		t.Fatalf("id=%q err=%#v, want typed partial-create error", id, err)
+	}
+}
+
+func TestCreateGroupPolicyRollbackSurvivesCallerCancellation(t *testing.T) {
+	raw := []byte(`{"displayName":"ADM Test","definitionValues":[{"enabled":true,"definition":{"id":"def-1"}}]}`)
+	base := &graphtest.Fake{PostFunc: func(_ string, path string, _ json.RawMessage) (json.RawMessage, error) {
+		if strings.HasSuffix(path, "/updateDefinitionValues") {
+			return nil, context.Canceled
+		}
+		return json.RawMessage(`{"id":"created-1"}`), nil
+	}}
+	f := &cleanupContextFake{Fake: base}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := Create(ctx, f, "GroupPolicyConfigurations", raw, ""); err == nil {
+		t.Fatal("settings failure should still be reported")
+	}
+	if f.deleteCtxErr != nil {
+		t.Fatalf("rollback reused cancelled context: %v", f.deleteCtxErr)
 	}
 }
 

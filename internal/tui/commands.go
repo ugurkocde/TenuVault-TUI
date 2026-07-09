@@ -41,6 +41,7 @@ type (
 	diffDoneMsg    struct {
 		changes []diff.Change
 		err     error
+		gen     int
 	}
 	backupsLoadedMsg []store.Backup
 	cleanupDoneMsg   struct{ err error }
@@ -204,9 +205,9 @@ func cleanupBackups(root string, days int) tea.Cmd {
 }
 
 // runDiff compares two backups.
-func runDiff(older, newer store.Backup) tea.Cmd {
+func runDiff(older, newer store.Backup, gen int) tea.Cmd {
 	return func() tea.Msg {
 		changes, err := diff.Compare(older, newer)
-		return diffDoneMsg{changes: changes, err: err}
+		return diffDoneMsg{changes: changes, err: err, gen: gen}
 	}
 }

@@ -193,6 +193,7 @@ type model struct {
 	diffChanges []diff.Change
 	diffScroll  int
 	diffLoading bool
+	diffGen     int
 
 	// restore
 	restoreBackup  *store.Backup
