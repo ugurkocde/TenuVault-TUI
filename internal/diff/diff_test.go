@@ -3,6 +3,7 @@ package diff
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/store"
@@ -11,6 +12,9 @@ import (
 func writeBackup(t *testing.T, root, folder string, files map[string]map[string]string) store.Backup {
 	t.Helper()
 	path := filepath.Join(root, folder)
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	for cat, policies := range files {
 		dir := filepath.Join(path, cat)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -72,20 +76,46 @@ func TestEqualPolicyReportsReadFailure(t *testing.T) {
 	}
 }
 
-func TestCompareHandlesCategoryAddedOrRemoved(t *testing.T) {
+func TestCompareHandlesCategoryPresentInOnlyOneBackup(t *testing.T) {
 	root := t.TempDir()
-	older := writeBackup(t, root, "backup-old", map[string]map[string]string{
-		"OldOnly": {"old": `{"displayName":"old"}`},
+	older := writeBackup(t, root, "backup-2026-01-01-000000", map[string]map[string]string{
+		"RemovedCategory": {"old": `{}`},
 	})
-	newer := writeBackup(t, root, "backup-new", map[string]map[string]string{
-		"NewOnly": {"new": `{"displayName":"new"}`},
+	newer := writeBackup(t, root, "backup-2026-02-01-000000", map[string]map[string]string{
+		"AddedCategory": {"new": `{}`},
+	})
+
+	changes, err := Compare(older, newer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]ChangeType{}
+	for _, change := range changes {
+		got[change.Category+"/"+change.Name] = change.Type
+	}
+	if got["AddedCategory/new"] != Added || got["RemovedCategory/old"] != Removed {
+		t.Fatalf("changes=%+v", changes)
+	}
+}
+
+func TestCompareReturnsStableSortedChanges(t *testing.T) {
+	root := t.TempDir()
+	older := writeBackup(t, root, "backup-2026-01-01-000000", map[string]map[string]string{})
+	newer := writeBackup(t, root, "backup-2026-02-01-000000", map[string]map[string]string{
+		"ZCategory": {"z": `{}`},
+		"ACategory": {"b": `{}`, "a": `{}`},
 	})
 	changes, err := Compare(older, newer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(changes) != 2 {
-		t.Fatalf("changes=%+v, want one add and one removal", changes)
+	got := make([]string, 0, len(changes))
+	for _, change := range changes {
+		got = append(got, change.Category+"/"+change.Name)
+	}
+	want := []string{"ACategory/a", "ACategory/b", "ZCategory/z"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got=%v want=%v", got, want)
 	}
 }
 

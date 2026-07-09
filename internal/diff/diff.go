@@ -5,6 +5,7 @@ package diff
 
 import (
 	"reflect"
+	"sort"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/jsonutil"
 	"github.com/ugurkocde/TenuVault-TUI/internal/store"
@@ -102,6 +103,15 @@ func Compare(older, newer store.Backup) ([]Change, error) {
 			}
 		}
 	}
+	sort.Slice(changes, func(i, j int) bool {
+		if changes[i].Category != changes[j].Category {
+			return changes[i].Category < changes[j].Category
+		}
+		if changes[i].Name != changes[j].Name {
+			return changes[i].Name < changes[j].Name
+		}
+		return changes[i].Type < changes[j].Type
+	})
 	return changes, nil
 }
 

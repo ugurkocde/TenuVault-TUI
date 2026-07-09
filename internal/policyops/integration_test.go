@@ -12,16 +12,6 @@ import (
 	"github.com/ugurkocde/TenuVault-TUI/internal/graphtest"
 )
 
-type cleanupContextFake struct {
-	*graphtest.Fake
-	deleteCtxErr error
-}
-
-func (f *cleanupContextFake) Delete(ctx context.Context, _, _ string) error {
-	f.deleteCtxErr = ctx.Err()
-	return nil
-}
-
 func TestCreateGroupPolicyMultiPart(t *testing.T) {
 	raw := []byte(`{
 		"id":"old-id","displayName":"ADM Test","description":"",
@@ -119,7 +109,7 @@ func TestCreateGroupPolicyReportsFailedRollback(t *testing.T) {
 			}
 			return json.RawMessage(`{"id":"created-1"}`), nil
 		},
-		DeleteFunc: func(_, _ string) error { return errors.New("delete denied") },
+		DeleteFunc: func(context.Context, string, string) error { return errors.New("delete denied") },
 	}
 
 	id, err := Create(context.Background(), f, "GroupPolicyConfigurations", raw, "")
@@ -129,23 +119,52 @@ func TestCreateGroupPolicyReportsFailedRollback(t *testing.T) {
 	}
 }
 
-func TestCreateGroupPolicyRollbackSurvivesCallerCancellation(t *testing.T) {
+func TestCreateGroupPolicyRollbackSurvivesCancelledOperationContext(t *testing.T) {
 	raw := []byte(`{"displayName":"ADM Test","definitionValues":[{"enabled":true,"definition":{"id":"def-1"}}]}`)
-	base := &graphtest.Fake{PostFunc: func(_ string, path string, _ json.RawMessage) (json.RawMessage, error) {
-		if strings.HasSuffix(path, "/updateDefinitionValues") {
-			return nil, context.Canceled
-		}
-		return json.RawMessage(`{"id":"created-1"}`), nil
-	}}
-	f := &cleanupContextFake{Fake: base}
+	var rollbackCtxErr error
+	f := &graphtest.Fake{
+		PostFunc: func(_ string, path string, _ json.RawMessage) (json.RawMessage, error) {
+			if strings.HasSuffix(path, "/updateDefinitionValues") {
+				return nil, context.Canceled
+			}
+			return json.RawMessage(`{"id":"created-1"}`), nil
+		},
+		DeleteFunc: func(ctx context.Context, _, _ string) error {
+			rollbackCtxErr = ctx.Err()
+			return nil
+		},
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-
-	if _, err := Create(ctx, f, "GroupPolicyConfigurations", raw, ""); err == nil {
-		t.Fatal("settings failure should still be reported")
+	if id, err := Create(ctx, f, "GroupPolicyConfigurations", raw, ""); err == nil || id != "" {
+		t.Fatalf("id=%q err=%v", id, err)
 	}
-	if f.deleteCtxErr != nil {
-		t.Fatalf("rollback reused cancelled context: %v", f.deleteCtxErr)
+	if rollbackCtxErr != nil || len(f.Deletes) != 1 {
+		t.Fatalf("rollback ctx err=%v deletes=%v", rollbackCtxErr, f.Deletes)
+	}
+}
+
+func TestCreateGroupPolicyRejectsMissingCreatedIDBeforeSettingsWrite(t *testing.T) {
+	raw := []byte(`{"displayName":"ADM Test","definitionValues":[{"enabled":true,"definition":{"id":"def-1"}}]}`)
+	f := &graphtest.Fake{PostFunc: func(_ string, _ string, _ json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`{}`), nil
+	}}
+	if _, err := Create(context.Background(), f, "GroupPolicyConfigurations", raw, ""); err == nil {
+		t.Fatal("missing created id should fail")
+	}
+	if len(f.Posts) != 1 || len(f.Deletes) != 0 {
+		t.Fatalf("posts=%d deletes=%v", len(f.Posts), f.Deletes)
+	}
+}
+
+func TestCreateGroupPolicyRejectsInvalidDefinitionBeforeCreating(t *testing.T) {
+	raw := []byte(`{"displayName":"ADM Test","definitionValues":[{"enabled":true,"definition":{}}]}`)
+	f := &graphtest.Fake{}
+	if _, err := Create(context.Background(), f, "GroupPolicyConfigurations", raw, ""); err == nil {
+		t.Fatal("missing definition id should fail")
+	}
+	if len(f.Posts) != 0 {
+		t.Fatalf("invalid policy should not be created, posts=%d", len(f.Posts))
 	}
 }
 
@@ -228,5 +247,25 @@ func TestFetchFullWarnsWhenAssignmentsFail(t *testing.T) {
 	_, warn := FetchFull(context.Background(), f, pt, []byte(`{"id":"cfg-1","displayName":"x"}`), true)
 	if !warn {
 		t.Fatal("assignment failure must mark the policy incomplete")
+	}
+}
+
+func TestFetchFullWarnsWhenGroupPolicyPresentationsFail(t *testing.T) {
+	pt, ok := catalog.ByKey("groupPolicyConfigurations")
+	if !ok {
+		t.Fatal("groupPolicyConfigurations missing from catalog")
+	}
+	f := &graphtest.Fake{ListFunc: func(_, path string, _ url.Values) ([]json.RawMessage, error) {
+		if strings.HasSuffix(path, "/definitionValues") {
+			return []json.RawMessage{json.RawMessage(`{"id":"dv-1","definition":{"id":"def-1"}}`)}, nil
+		}
+		if strings.HasSuffix(path, "/presentationValues") {
+			return nil, errors.New("presentation fetch failed")
+		}
+		return nil, nil
+	}}
+	_, warn := FetchFull(context.Background(), f, pt, []byte(`{"id":"cfg-1","displayName":"x"}`), false)
+	if !warn {
+		t.Fatal("presentation failure must mark the policy incomplete")
 	}
 }

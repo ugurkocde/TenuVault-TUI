@@ -29,6 +29,10 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+type closeErrorBody struct{ io.Reader }
+
+func (closeErrorBody) Close() error { return errors.New("late close error") }
+
 func resp(code int, body string, header http.Header) *http.Response {
 	if header == nil {
 		header = http.Header{}
@@ -192,6 +196,20 @@ func TestPostSendsBodyAndContentType(t *testing.T) {
 	}
 }
 
+func TestDoDoesNotTurnSuccessfulWriteIntoFailureOnBodyCloseError(t *testing.T) {
+	c, _ := testClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusCreated,
+			Header:     http.Header{},
+			Body:       closeErrorBody{Reader: strings.NewReader(`{"id":"new"}`)},
+		}, nil
+	}))
+	data, _, err := c.do(context.Background(), http.MethodPost, baseV1+"/things", []byte(`{}`))
+	if err != nil || string(data) != `{"id":"new"}` {
+		t.Fatalf("data=%s err=%v", data, err)
+	}
+}
+
 func TestListAllReturnsErrorOnBadJSON(t *testing.T) {
 	c, _ := testClient(roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return resp(http.StatusOK, `not json`, nil), nil
@@ -222,7 +240,7 @@ func TestDoRetriesOn503(t *testing.T) {
 	}
 }
 
-func TestDoRetriesGetOn502ButNotPost(t *testing.T) {
+func TestDoRetriesGetServerErrorsButNotPost(t *testing.T) {
 	var getAttempts int32
 	getClient, _ := testClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
 		if atomic.AddInt32(&getAttempts, 1) == 1 {
@@ -237,16 +255,18 @@ func TestDoRetriesGetOn502ButNotPost(t *testing.T) {
 		t.Fatalf("GET attempts=%d, want 2", getAttempts)
 	}
 
-	var postAttempts int32
-	postClient, _ := testClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
-		atomic.AddInt32(&postAttempts, 1)
-		return resp(http.StatusBadGateway, "", nil), nil
-	}))
-	if _, _, err := postClient.do(context.Background(), http.MethodPost, baseV1+"/things", []byte(`{}`)); err == nil {
-		t.Fatal("POST 502 should fail without retry")
-	}
-	if postAttempts != 1 {
-		t.Fatalf("POST attempts=%d, want 1", postAttempts)
+	for _, status := range []int{http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout} {
+		var postAttempts int32
+		postClient, _ := testClient(roundTripFunc(func(*http.Request) (*http.Response, error) {
+			atomic.AddInt32(&postAttempts, 1)
+			return resp(status, "", nil), nil
+		}))
+		if _, _, err := postClient.do(context.Background(), http.MethodPost, baseV1+"/things", []byte(`{}`)); err == nil {
+			t.Fatalf("POST %d should fail without retry", status)
+		}
+		if postAttempts != 1 {
+			t.Fatalf("POST %d attempts=%d, want 1", status, postAttempts)
+		}
 	}
 }
 

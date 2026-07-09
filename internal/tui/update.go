@@ -519,9 +519,6 @@ func (m model) keyBackupSelect(key string) (tea.Model, tea.Cmd) {
 func (m model) keyBrowse(key string) (tea.Model, tea.Cmd) {
 	if m.browseLoading || m.diffLoading {
 		if key == "esc" || key == "q" {
-			if m.diffLoading {
-				m.diffGen++
-			}
 			m.diffLoading = false
 			m.goTo(screenDashboard)
 		}
@@ -575,8 +572,8 @@ func (m model) keyBrowse(key string) (tea.Model, tea.Cmd) {
 			t := b
 			m.diffB = &t
 			older, newer := orderBackups(m.diffA, m.diffB)
-			m.diffLoading = true
 			m.diffGen++
+			m.diffLoading = true
 			return m, runDiff(older, newer, m.diffGen)
 		}
 	}

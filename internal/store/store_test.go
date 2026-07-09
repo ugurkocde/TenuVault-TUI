@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,19 +50,9 @@ func TestListRejectsCorruptMetadata(t *testing.T) {
 	}
 }
 
-func TestBackupFolderTimeSupportsUniqueSuffix(t *testing.T) {
-	got, err := backupFolderTime("backup-2026-07-09-120000.000000123-2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Nanosecond() != 123 {
-		t.Fatalf("nanoseconds=%d, want 123", got.Nanosecond())
-	}
-}
-
-func TestListSkipsBackupWithoutCommitManifest(t *testing.T) {
+func TestListSkipsBackupWithoutCommitMarker(t *testing.T) {
 	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, "backup-2026-07-09-120000"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "backup-2026-01-01-000000", "DeviceConfigurations"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	backups, err := List(root)
@@ -69,7 +60,17 @@ func TestListSkipsBackupWithoutCommitManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(backups) != 0 {
-		t.Fatalf("backups=%v, want incomplete directory hidden", backups)
+		t.Fatalf("backups=%+v, want interrupted directory hidden", backups)
+	}
+}
+
+func TestBackupFolderTimeSupportsUniqueSuffix(t *testing.T) {
+	got, err := backupFolderTime("backup-2026-07-09-120000.000000123-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Nanosecond() != 123 {
+		t.Fatalf("nanoseconds=%d, want 123", got.Nanosecond())
 	}
 }
 
@@ -85,5 +86,49 @@ func TestCleanupRemovesStaleUncommittedBackup(t *testing.T) {
 	}
 	if removed != 1 {
 		t.Fatalf("removed=%d, want stale incomplete backup removed", removed)
+	}
+}
+
+func TestVerifyRejectsChecksumPathOutsideBackup(t *testing.T) {
+	dir := t.TempDir()
+	data, err := json.Marshal(Checksums{Algorithm: "sha256", Files: map[string]string{"../outside.json": "bad"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ChecksumsFile), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(dir); err == nil {
+		t.Fatal("non-local checksum path should be rejected")
+	}
+}
+
+func TestVerifyReportsUnreadableRecordedPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "Category"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "Category", "policy.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteChecksums(dir, map[string]string{"Category/policy.json": "bad"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(dir); err == nil {
+		t.Fatal("a recorded path that cannot be read as a file should return an error")
+	}
+}
+
+func TestVerifyRejectsUnsupportedAlgorithm(t *testing.T) {
+	dir := t.TempDir()
+	data, err := json.Marshal(Checksums{Algorithm: "md5", Files: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ChecksumsFile), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(dir); err == nil {
+		t.Fatal("unsupported checksum algorithm should be rejected")
 	}
 }

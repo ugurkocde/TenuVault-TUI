@@ -63,10 +63,10 @@ func (c *Client) token(ctx context.Context) (string, error) {
 	return tok.Token, nil
 }
 
-// do performs a single request against an absolute or relative Graph URL,
-// retrying on HTTP 429/503/504 honoring Retry-After. Transport-level errors are
-// retried only for GET: a POST/PATCH may have been applied server-side even
-// when the response never arrived, and retrying could duplicate a policy.
+// do performs a request against an absolute or relative Graph URL. GET retries
+// transient server failures and every method honors throttling (429). Other
+// write failures are not retried: a POST/PATCH may have been applied server-side
+// even when a 5xx response is returned, and retrying could duplicate a policy.
 func (c *Client) do(ctx context.Context, method, fullURL string, body []byte) ([]byte, int, error) {
 	for attempt := 0; ; attempt++ {
 		// Acquire the token each attempt so a long Retry-After wait can't leave
@@ -102,19 +102,15 @@ func (c *Client) do(ctx context.Context, method, fullURL string, body []byte) ([
 			return nil, 0, err
 		}
 		data, readErr := io.ReadAll(resp.Body)
-		closeErr := resp.Body.Close()
-		if readErr != nil || closeErr != nil {
-			err := readErr
-			if err == nil {
-				err = closeErr
-			}
+		_ = resp.Body.Close()
+		if readErr != nil {
 			if method == http.MethodGet && attempt < 3 {
 				if !sleepCtx(ctx, backoff(attempt)) {
 					return nil, resp.StatusCode, ctx.Err()
 				}
 				continue
 			}
-			return nil, resp.StatusCode, fmt.Errorf("read response body: %w", err)
+			return nil, resp.StatusCode, fmt.Errorf("read response body: %w", readErr)
 		}
 
 		if retryableStatus(method, resp.StatusCode) && attempt < 5 {
@@ -198,13 +194,19 @@ func apiError(status int, body []byte) string {
 // retryableStatus reports whether Graph signalled a transient condition worth
 // retrying (throttling or a temporarily unavailable service).
 func retryableStatus(method string, code int) bool {
-	switch code {
-	case http.StatusTooManyRequests, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+	if code == http.StatusTooManyRequests {
 		return true
-	case http.StatusInternalServerError, http.StatusBadGateway:
-		return method == http.MethodGet
 	}
-	return false
+	if method != http.MethodGet {
+		return false
+	}
+	switch code {
+	case http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
 }
 
 func retryAfter(value string, now time.Time) (time.Duration, bool) {

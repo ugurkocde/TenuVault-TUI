@@ -7,6 +7,7 @@ import (
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/config"
 	"github.com/ugurkocde/TenuVault-TUI/internal/connection"
+	"github.com/ugurkocde/TenuVault-TUI/internal/diff"
 	"github.com/ugurkocde/TenuVault-TUI/internal/fileutil"
 	"github.com/ugurkocde/TenuVault-TUI/internal/graph"
 	"github.com/ugurkocde/TenuVault-TUI/internal/store"
@@ -85,17 +86,17 @@ func TestCompletedBackgroundDiffDoesNotHijackNavigation(t *testing.T) {
 	}
 }
 
-func TestStaleDiffResultCannotReplaceActiveComparison(t *testing.T) {
+func TestStaleDiffDoesNotOverwriteNewerComparison(t *testing.T) {
 	m := New(testConfig(t))
 	m.screen = screenBrowse
-	m.diffLoading = true
 	m.diffGen = 2
+	m.diffLoading = true
+	m.diffChanges = []diff.Change{{Name: "newer"}}
 
-	next, _ := m.Update(diffDoneMsg{gen: 1})
+	next, _ := m.Update(diffDoneMsg{gen: 1, changes: []diff.Change{{Name: "stale"}}})
 	got := next.(model)
-	if !got.diffLoading || got.screen != screenBrowse || len(got.diffChanges) != 0 {
-		t.Fatalf("stale result changed active flow: loading=%v screen=%v changes=%v",
-			got.diffLoading, got.screen, got.diffChanges)
+	if !got.diffLoading || len(got.diffChanges) != 1 || got.diffChanges[0].Name != "newer" {
+		t.Fatalf("loading=%v changes=%+v", got.diffLoading, got.diffChanges)
 	}
 }
 

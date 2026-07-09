@@ -191,12 +191,22 @@ func Verify(dir string) (VerifyReport, error) {
 	if err != nil {
 		return VerifyReport{}, err
 	}
+	if !strings.EqualFold(c.Algorithm, "sha256") {
+		return VerifyReport{}, fmt.Errorf("unsupported checksum algorithm %q", c.Algorithm)
+	}
 	var rep VerifyReport
 	for rel, want := range c.Files {
-		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		nativeRel := filepath.FromSlash(rel)
+		if !filepath.IsLocal(nativeRel) {
+			return rep, fmt.Errorf("invalid checksum path %q", rel)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, nativeRel))
 		if err != nil {
-			rep.Missing = append(rep.Missing, rel)
-			continue
+			if os.IsNotExist(err) {
+				rep.Missing = append(rep.Missing, rel)
+				continue
+			}
+			return rep, fmt.Errorf("read %s: %w", rel, err)
 		}
 		sum := sha256.Sum256(data)
 		if hex.EncodeToString(sum[:]) != want {
@@ -267,18 +277,18 @@ func Cleanup(root string, days int) (int, error) {
 
 func backupFolderTime(folder string) (time.Time, error) {
 	raw := strings.TrimPrefix(folder, "backup-")
-	if ts, err := time.Parse("2006-01-02-150405.000000000", raw); err == nil {
+	if ts, err := time.ParseInLocation("2006-01-02-150405.000000000", raw, time.Local); err == nil {
 		return ts, nil
 	}
 	if dot := strings.IndexByte(raw, '.'); dot >= 0 {
 		if dash := strings.LastIndexByte(raw, '-'); dash > dot {
 			if _, err := strconv.Atoi(raw[dash+1:]); err == nil {
 				raw = raw[:dash]
-				if ts, err := time.Parse("2006-01-02-150405.000000000", raw); err == nil {
+				if ts, err := time.ParseInLocation("2006-01-02-150405.000000000", raw, time.Local); err == nil {
 					return ts, nil
 				}
 			}
 		}
 	}
-	return time.Parse("2006-01-02-150405", raw)
+	return time.ParseInLocation("2006-01-02-150405", raw, time.Local)
 }

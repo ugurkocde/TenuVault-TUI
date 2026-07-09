@@ -39,10 +39,18 @@ func FetchFull(ctx context.Context, c graph.API, pt catalog.PolicyType, item jso
 		} else {
 			enriched := make([]json.RawMessage, 0, len(dvs))
 			for _, dv := range dvs {
+				var definitionValue map[string]any
+				if json.Unmarshal(dv, &definitionValue) != nil || buildDefinitionValue(definitionValue) == nil {
+					warn = true
+				}
 				if dvID := IDOf(dv); dvID != "" {
 					if pvs, perr := c.ListAll(ctx, pt.Version, pt.ListPath+"/"+id+"/definitionValues/"+dvID+"/presentationValues", url.Values{"$expand": {"presentation"}}); perr == nil {
 						dv = embed(dv, "presentationValues", pvs)
+					} else {
+						warn = true
 					}
+				} else {
+					warn = true
 				}
 				enriched = append(enriched, dv)
 			}
@@ -202,32 +210,40 @@ func createGroupPolicy(ctx context.Context, c graph.API, pt catalog.PolicyType, 
 	if err != nil {
 		return "", err
 	}
+	var update json.RawMessage
+	if len(defVals) > 0 {
+		added := make([]json.RawMessage, 0, len(defVals))
+		for i, dvAny := range defVals {
+			dv, ok := dvAny.(map[string]any)
+			if !ok {
+				return "", fmt.Errorf("definition value %d is not an object", i+1)
+			}
+			built := buildDefinitionValue(dv)
+			if built == nil {
+				return "", fmt.Errorf("definition value %d has no definition id", i+1)
+			}
+			added = append(added, built)
+		}
+		update, err = json.Marshal(map[string]any{
+			"added":      added,
+			"updated":    []json.RawMessage{},
+			"deletedIds": []string{},
+		})
+		if err != nil {
+			return "", err
+		}
+	}
+
 	created, err := c.Post(ctx, pt.Version, pt.ListPath, body)
 	if err != nil {
 		return "", err
 	}
 	id := IDOf(created)
+	if id == "" {
+		return "", fmt.Errorf("created group policy response did not include an id; settings were not applied")
+	}
 	if len(defVals) == 0 {
 		return id, nil
-	}
-
-	added := make([]json.RawMessage, 0, len(defVals))
-	for _, dvAny := range defVals {
-		dv, ok := dvAny.(map[string]any)
-		if !ok {
-			continue
-		}
-		if b := buildDefinitionValue(dv); b != nil {
-			added = append(added, b)
-		}
-	}
-	update, err := json.Marshal(map[string]any{
-		"added":      added,
-		"updated":    []json.RawMessage{},
-		"deletedIds": []string{},
-	})
-	if err != nil {
-		return id, err
 	}
 	if _, err := c.Post(ctx, pt.Version, pt.ListPath+"/"+id+"/updateDefinitionValues", update); err != nil {
 		// A cancellation may be what interrupted the settings POST. Cleanup must
@@ -385,6 +401,14 @@ func routeByType(category string, raw json.RawMessage) (catalog.PolicyType, bool
 		break
 	}
 	return match, found
+}
+
+// ResolveTypeKey returns the catalog key that would be used to create raw.
+// It is primarily useful for disambiguating categories shared by several
+// policy types, such as iOS/Android/Windows app protection policies.
+func ResolveTypeKey(category string, raw json.RawMessage) (string, bool) {
+	pt, ok := routeByType(category, raw)
+	return pt.Key, ok
 }
 
 // supportsAssignments defers to the catalog, the single source of truth for

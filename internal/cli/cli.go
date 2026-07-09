@@ -22,6 +22,7 @@ import (
 	"github.com/ugurkocde/TenuVault-TUI/internal/diff"
 	"github.com/ugurkocde/TenuVault-TUI/internal/graph"
 	"github.com/ugurkocde/TenuVault-TUI/internal/jsonutil"
+	"github.com/ugurkocde/TenuVault-TUI/internal/policyops"
 	"github.com/ugurkocde/TenuVault-TUI/internal/store"
 	"github.com/ugurkocde/TenuVault-TUI/internal/syncer"
 )
@@ -435,10 +436,14 @@ func selectedTypes(csv string) ([]catalog.PolicyType, error) {
 	}
 	var out []catalog.PolicyType
 	var unknown []string
+	seen := map[string]bool{}
 	for _, k := range strings.Split(csv, ",") {
 		k = strings.TrimSpace(k)
 		if pt, ok := catalog.ByKey(k); ok {
-			out = append(out, pt)
+			if !seen[pt.Key] {
+				out = append(out, pt)
+				seen[pt.Key] = true
+			}
 		} else {
 			unknown = append(unknown, k)
 		}
@@ -454,12 +459,14 @@ func selectedTypes(csv string) ([]catalog.PolicyType, error) {
 func backupItems(path, csv string) ([]syncer.Item, error) {
 	b := store.Backup{Path: path}
 	allow := map[string]bool{}
+	allowKey := map[string]bool{}
 	selected, err := selectedTypes(csv)
 	if err != nil {
 		return nil, err
 	}
 	for _, pt := range selected {
 		allow[pt.Category] = true
+		allowKey[pt.Key] = true
 	}
 	filtering := strings.TrimSpace(csv) != ""
 
@@ -480,8 +487,31 @@ func backupItems(path, csv string) ([]syncer.Item, error) {
 			return nil, fmt.Errorf("list policies in %s: %w", cat, err)
 		}
 		for _, f := range files {
+			if filtering && sharedCategory(cat) {
+				raw, err := store.Read(f.Path)
+				if err != nil {
+					return nil, fmt.Errorf("read %s: %w", f.Path, err)
+				}
+				key, ok := policyops.ResolveTypeKey(cat, raw)
+				if !ok {
+					return nil, fmt.Errorf("resolve policy type for %s", f.Path)
+				}
+				if !allowKey[key] {
+					continue
+				}
+			}
 			items = append(items, syncer.Item{Category: cat, Name: f.Name, Path: f.Path})
 		}
 	}
 	return items, nil
+}
+
+func sharedCategory(category string) bool {
+	n := 0
+	for _, pt := range catalog.All() {
+		if pt.Category == category {
+			n++
+		}
+	}
+	return n > 1
 }

@@ -37,7 +37,7 @@ type Fake struct {
 	ListFunc func(version, path string, query url.Values) ([]json.RawMessage, error)
 	PostFunc func(version, path string, body json.RawMessage) (json.RawMessage, error)
 	// DeleteFunc optionally customizes rollback delete behavior.
-	DeleteFunc func(version, path string) error
+	DeleteFunc func(ctx context.Context, version, path string) error
 
 	mu sync.Mutex
 	n  int
@@ -82,12 +82,12 @@ func (f *Fake) Patch(ctx context.Context, version, path string, body json.RawMes
 }
 
 // Delete records a rollback delete.
-func (f *Fake) Delete(_ context.Context, version, path string) error {
+func (f *Fake) Delete(ctx context.Context, version, path string) error {
 	f.mu.Lock()
 	f.Deletes = append(f.Deletes, key(version, path))
 	f.mu.Unlock()
 	if f.DeleteFunc != nil {
-		return f.DeleteFunc(version, path)
+		return f.DeleteFunc(ctx, version, path)
 	}
 	return nil
 }
