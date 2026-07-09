@@ -94,7 +94,7 @@ type resultReportItem struct {
 func (m model) restoreReport() resultReportDoc {
 	results := make([]resultReportItem, 0, len(m.restoreResults))
 	for _, r := range m.restoreResults {
-		item := resultReportItem{Category: r.Item.Category, Name: r.Item.Name, NewID: r.NewID}
+		item := resultReportItem{Category: r.Item.Category, Name: r.Item.Name, NewID: r.NewID, PartialContent: r.Warn}
 		if r.Err != nil {
 			item.Error = r.Err.Error()
 		}

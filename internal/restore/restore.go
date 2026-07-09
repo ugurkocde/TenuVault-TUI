@@ -25,6 +25,7 @@ type Item struct {
 type Result struct {
 	Item  Item
 	NewID string
+	Warn  bool
 	Err   error
 }
 
@@ -39,7 +40,7 @@ func Restore(ctx context.Context, c graph.API, items []Item) []Result {
 	sres := syncer.Run(ctx, c, nil, sitems, RestorePrefix, nil)
 	results := make([]Result, len(sres))
 	for i, r := range sres {
-		results[i] = Result{Item: items[i], NewID: r.NewID, Err: r.Err}
+		results[i] = Result{Item: items[i], NewID: r.NewID, Warn: r.Warn, Err: r.Err}
 	}
 	return results
 }

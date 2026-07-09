@@ -27,13 +27,17 @@ type PostCall struct {
 // It is safe for concurrent use once the stub maps are populated; configure
 // Lists, Gets, and PostFunc before handing it to code under test.
 type Fake struct {
-	Lists map[string][]json.RawMessage
-	Gets  map[string]json.RawMessage
-	Posts []PostCall
+	Lists   map[string][]json.RawMessage
+	Gets    map[string]json.RawMessage
+	Posts   []PostCall
+	Deletes []string
 
 	// PostFunc optionally customizes POST responses; the default returns an
 	// object with a generated id.
+	ListFunc func(version, path string, query url.Values) ([]json.RawMessage, error)
 	PostFunc func(version, path string, body json.RawMessage) (json.RawMessage, error)
+	// DeleteFunc optionally customizes rollback delete behavior.
+	DeleteFunc func(ctx context.Context, version, path string) error
 
 	mu sync.Mutex
 	n  int
@@ -50,7 +54,10 @@ func (f *Fake) Get(_ context.Context, version, path string, _ url.Values) (json.
 }
 
 // ListAll returns a stubbed collection, or an empty list if none is registered.
-func (f *Fake) ListAll(_ context.Context, version, path string, _ url.Values) ([]json.RawMessage, error) {
+func (f *Fake) ListAll(_ context.Context, version, path string, query url.Values) ([]json.RawMessage, error) {
+	if f.ListFunc != nil {
+		return f.ListFunc(version, path, query)
+	}
 	return f.Lists[key(version, path)], nil
 }
 
@@ -72,6 +79,17 @@ func (f *Fake) Post(_ context.Context, version, path string, body json.RawMessag
 // Patch records the call as a POST-like entry and returns a generated id.
 func (f *Fake) Patch(ctx context.Context, version, path string, body json.RawMessage) (json.RawMessage, error) {
 	return f.Post(ctx, version, path, body)
+}
+
+// Delete records a rollback delete.
+func (f *Fake) Delete(ctx context.Context, version, path string) error {
+	f.mu.Lock()
+	f.Deletes = append(f.Deletes, key(version, path))
+	f.mu.Unlock()
+	if f.DeleteFunc != nil {
+		return f.DeleteFunc(ctx, version, path)
+	}
+	return nil
 }
 
 // PostsTo returns the bodies of POSTs made to a path (substring match).

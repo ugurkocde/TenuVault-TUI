@@ -100,6 +100,22 @@ func TestRunCancelledKeepsPartialBackup(t *testing.T) {
 	}
 }
 
+func TestCreateBackupDirAvoidsSameInstantCollision(t *testing.T) {
+	root := t.TempDir()
+	start := time.Date(2026, 7, 9, 12, 0, 0, 123, time.UTC)
+	folderA, pathA, err := createBackupDir(root, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	folderB, pathB, err := createBackupDir(root, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if folderA == folderB || pathA == pathB {
+		t.Fatalf("colliding folders: %q and %q", folderA, folderB)
+	}
+}
+
 // gauge wraps a graph.API and tracks how many detail Gets run at once.
 type gauge struct {
 	graph.API

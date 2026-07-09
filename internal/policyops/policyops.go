@@ -2,8 +2,9 @@
 // logic used by both restore (from a backup) and sync (tenant to tenant). It is
 // the single place that enforces the create-only, never-overwrite contract:
 // read-only fields and OData annotations are stripped, assignments are removed,
-// Conditional Access is created disabled, and every write is a POST (create) —
-// never a PATCH or DELETE of anything existing.
+// Conditional Access is created disabled, and existing tenant objects are never
+// patched or deleted. A failed multi-step create may delete only the object that
+// operation just created as a compensating rollback.
 package policyops
 
 import (
@@ -12,6 +13,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
 	"github.com/ugurkocde/TenuVault-TUI/internal/graph"
@@ -37,10 +39,18 @@ func FetchFull(ctx context.Context, c graph.API, pt catalog.PolicyType, item jso
 		} else {
 			enriched := make([]json.RawMessage, 0, len(dvs))
 			for _, dv := range dvs {
+				var definitionValue map[string]any
+				if json.Unmarshal(dv, &definitionValue) != nil || buildDefinitionValue(definitionValue) == nil {
+					warn = true
+				}
 				if dvID := IDOf(dv); dvID != "" {
 					if pvs, perr := c.ListAll(ctx, pt.Version, pt.ListPath+"/"+id+"/definitionValues/"+dvID+"/presentationValues", url.Values{"$expand": {"presentation"}}); perr == nil {
 						dv = embed(dv, "presentationValues", pvs)
+					} else {
+						warn = true
 					}
+				} else {
+					warn = true
 				}
 				enriched = append(enriched, dv)
 			}
@@ -75,6 +85,8 @@ func FetchFull(ctx context.Context, c graph.API, pt catalog.PolicyType, item jso
 	if includeAssignments && id != "" && supportsAssignments(pt) {
 		if vals, err := c.ListAll(ctx, pt.Version, pt.ListPath+"/"+id+"/assignments", nil); err == nil {
 			full = embed(full, "assignments", vals)
+		} else {
+			warn = true
 		}
 	}
 	return full, warn
@@ -198,38 +210,70 @@ func createGroupPolicy(ctx context.Context, c graph.API, pt catalog.PolicyType, 
 	if err != nil {
 		return "", err
 	}
+	var update json.RawMessage
+	if len(defVals) > 0 {
+		added := make([]json.RawMessage, 0, len(defVals))
+		for i, dvAny := range defVals {
+			dv, ok := dvAny.(map[string]any)
+			if !ok {
+				return "", fmt.Errorf("definition value %d is not an object", i+1)
+			}
+			built := buildDefinitionValue(dv)
+			if built == nil {
+				return "", fmt.Errorf("definition value %d has no definition id", i+1)
+			}
+			added = append(added, built)
+		}
+		update, err = json.Marshal(map[string]any{
+			"added":      added,
+			"updated":    []json.RawMessage{},
+			"deletedIds": []string{},
+		})
+		if err != nil {
+			return "", err
+		}
+	}
+
 	created, err := c.Post(ctx, pt.Version, pt.ListPath, body)
 	if err != nil {
 		return "", err
 	}
 	id := IDOf(created)
+	if id == "" {
+		return "", fmt.Errorf("created group policy response did not include an id; settings were not applied")
+	}
 	if len(defVals) == 0 {
 		return id, nil
 	}
-
-	added := make([]json.RawMessage, 0, len(defVals))
-	for _, dvAny := range defVals {
-		dv, ok := dvAny.(map[string]any)
-		if !ok {
-			continue
-		}
-		if b := buildDefinitionValue(dv); b != nil {
-			added = append(added, b)
-		}
-	}
-	update, err := json.Marshal(map[string]any{
-		"added":      added,
-		"updated":    []json.RawMessage{},
-		"deletedIds": []string{},
-	})
-	if err != nil {
-		return id, err
-	}
 	if _, err := c.Post(ctx, pt.Version, pt.ListPath+"/"+id+"/updateDefinitionValues", update); err != nil {
-		return id, fmt.Errorf("policy created, but its settings failed to apply: %w", err)
+		// A cancellation may be what interrupted the settings POST. Cleanup must
+		// therefore retain request values but have its own short deadline.
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+		defer cancel()
+		rollbackErr := c.Delete(rollbackCtx, pt.Version, pt.ListPath+"/"+id)
+		if rollbackErr == nil {
+			return "", fmt.Errorf("policy settings failed to apply; newly created policy was rolled back: %w", err)
+		}
+		return id, &PartialCreateError{PolicyID: id, ApplyErr: err, RollbackErr: rollbackErr}
 	}
 	return id, nil
 }
+
+// PartialCreateError means a multi-step create failed after Graph allocated the
+// policy and the compensating delete also failed. PolicyID identifies the
+// resource requiring manual cleanup.
+type PartialCreateError struct {
+	PolicyID    string
+	ApplyErr    error
+	RollbackErr error
+}
+
+func (e *PartialCreateError) Error() string {
+	return fmt.Sprintf("policy %s was created without settings; apply failed: %v; rollback failed: %v",
+		e.PolicyID, e.ApplyErr, e.RollbackErr)
+}
+
+func (e *PartialCreateError) Unwrap() error { return e.ApplyErr }
 
 // buildDefinitionValue converts a captured definitionValue into an
 // updateDefinitionValues "added" entry with definition/presentation @odata.bind
@@ -357,6 +401,14 @@ func routeByType(category string, raw json.RawMessage) (catalog.PolicyType, bool
 		break
 	}
 	return match, found
+}
+
+// ResolveTypeKey returns the catalog key that would be used to create raw.
+// It is primarily useful for disambiguating categories shared by several
+// policy types, such as iOS/Android/Windows app protection policies.
+func ResolveTypeKey(category string, raw json.RawMessage) (string, bool) {
+	pt, ok := routeByType(category, raw)
+	return pt.Key, ok
 }
 
 // supportsAssignments defers to the catalog, the single source of truth for

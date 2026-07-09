@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ugurkocde/TenuVault-TUI/internal/restore"
 	"github.com/ugurkocde/TenuVault-TUI/internal/syncer"
 )
 
@@ -62,6 +63,19 @@ func TestExportSyncResults(t *testing.T) {
 	}
 	if !doc.Results[2].PartialContent {
 		t.Error("partial-content flag not exported")
+	}
+}
+
+func TestRestoreReportPreservesPartialContentWarning(t *testing.T) {
+	m := seededModel()
+	m.restoreResults = []restore.Result{{
+		Item:  restore.Item{Category: "DeviceConfigurations", Name: "Partial"},
+		NewID: "new-1",
+		Warn:  true,
+	}}
+	doc := m.restoreReport()
+	if len(doc.Results) != 1 || !doc.Results[0].PartialContent {
+		t.Fatalf("results=%+v", doc.Results)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -32,6 +33,7 @@ type API interface {
 	ListAll(ctx context.Context, version, path string, query url.Values) ([]json.RawMessage, error)
 	Post(ctx context.Context, version, path string, body json.RawMessage) (json.RawMessage, error)
 	Patch(ctx context.Context, version, path string, body json.RawMessage) (json.RawMessage, error)
+	Delete(ctx context.Context, version, path string) error
 }
 
 // Client calls Microsoft Graph using a token credential and a fixed scope set.
@@ -61,10 +63,10 @@ func (c *Client) token(ctx context.Context) (string, error) {
 	return tok.Token, nil
 }
 
-// do performs a single request against an absolute or relative Graph URL,
-// retrying on HTTP 429/503/504 honoring Retry-After. Transport-level errors are
-// retried only for GET: a POST/PATCH may have been applied server-side even
-// when the response never arrived, and retrying could duplicate a policy.
+// do performs a request against an absolute or relative Graph URL. GET retries
+// transient server failures and every method honors throttling (429). Other
+// write failures are not retried: a POST/PATCH may have been applied server-side
+// even when a 5xx response is returned, and retrying could duplicate a policy.
 func (c *Client) do(ctx context.Context, method, fullURL string, body []byte) ([]byte, int, error) {
 	for attempt := 0; ; attempt++ {
 		// Acquire the token each attempt so a long Retry-After wait can't leave
@@ -99,14 +101,23 @@ func (c *Client) do(ctx context.Context, method, fullURL string, body []byte) ([
 			}
 			return nil, 0, err
 		}
-		data, _ := io.ReadAll(resp.Body)
+		data, readErr := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
+		if readErr != nil {
+			if method == http.MethodGet && attempt < 3 {
+				if !sleepCtx(ctx, backoff(attempt)) {
+					return nil, resp.StatusCode, ctx.Err()
+				}
+				continue
+			}
+			return nil, resp.StatusCode, fmt.Errorf("read response body: %w", readErr)
+		}
 
-		if retryableStatus(resp.StatusCode) && attempt < 5 {
+		if retryableStatus(method, resp.StatusCode) && attempt < 5 {
 			wait := backoff(attempt)
 			if ra := resp.Header.Get("Retry-After"); ra != "" {
-				if secs, err := strconv.Atoi(ra); err == nil {
-					wait = time.Duration(secs) * time.Second
+				if parsed, ok := retryAfter(ra, time.Now()); ok {
+					wait = parsed
 				}
 			}
 			if wait > 2*time.Minute {
@@ -182,18 +193,38 @@ func apiError(status int, body []byte) string {
 
 // retryableStatus reports whether Graph signalled a transient condition worth
 // retrying (throttling or a temporarily unavailable service).
-func retryableStatus(code int) bool {
-	switch code {
-	case http.StatusTooManyRequests, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+func retryableStatus(method string, code int) bool {
+	if code == http.StatusTooManyRequests {
 		return true
 	}
-	return false
+	if method != http.MethodGet {
+		return false
+	}
+	switch code {
+	case http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func retryAfter(value string, now time.Time) (time.Duration, bool) {
+	if secs, err := strconv.Atoi(value); err == nil {
+		return max(time.Duration(secs)*time.Second, 0), true
+	}
+	when, err := http.ParseTime(value)
+	if err != nil {
+		return 0, false
+	}
+	return max(when.Sub(now), 0), true
 }
 
 // backoff returns the exponential fallback wait for the given attempt when no
 // Retry-After header is present: 2s, 4s, 8s, 16s, 32s.
 func backoff(attempt int) time.Duration {
-	return time.Duration(2<<attempt) * time.Second
+	base := time.Duration(2<<attempt) * time.Second
+	return base + time.Duration(rand.Int64N(int64(base/4)+1))
 }
 
 // sleepCtx waits for d or until ctx is cancelled; it reports whether the full
@@ -255,4 +286,11 @@ func (c *Client) Post(ctx context.Context, version, path string, body json.RawMe
 func (c *Client) Patch(ctx context.Context, version, path string, body json.RawMessage) (json.RawMessage, error) {
 	data, _, err := c.do(ctx, http.MethodPatch, base(version)+path, body)
 	return data, err
+}
+
+// Delete removes a resource. Callers use it only to roll back a resource they
+// created in the same operation.
+func (c *Client) Delete(ctx context.Context, version, path string) error {
+	_, _, err := c.do(ctx, http.MethodDelete, base(version)+path, nil)
+	return err
 }

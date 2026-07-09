@@ -5,6 +5,7 @@ package diff
 
 import (
 	"reflect"
+	"sort"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/jsonutil"
 	"github.com/ugurkocde/TenuVault-TUI/internal/store"
@@ -63,11 +64,24 @@ func Compare(older, newer store.Backup) ([]Change, error) {
 		return nil, err
 	}
 	cats := union(oldCats, newCats)
+	oldSet, newSet := stringSet(oldCats), stringSet(newCats)
 
 	var changes []Change
 	for _, cat := range cats {
-		oldFiles := indexByName(older, cat)
-		newFiles := indexByName(newer, cat)
+		oldFiles := map[string]string{}
+		if oldSet[cat] {
+			oldFiles, err = indexByName(older, cat)
+			if err != nil {
+				return nil, err
+			}
+		}
+		newFiles := map[string]string{}
+		if newSet[cat] {
+			newFiles, err = indexByName(newer, cat)
+			if err != nil {
+				return nil, err
+			}
+		}
 
 		for name, np := range newFiles {
 			op, existed := oldFiles[name]
@@ -75,7 +89,11 @@ func Compare(older, newer store.Backup) ([]Change, error) {
 				changes = append(changes, Change{cat, name, Added, severity(cat, Added)})
 				continue
 			}
-			if !equalPolicy(op, np) {
+			equal, err := equalPolicy(op, np)
+			if err != nil {
+				return nil, err
+			}
+			if !equal {
 				changes = append(changes, Change{cat, name, Modified, severity(cat, Modified)})
 			}
 		}
@@ -85,33 +103,56 @@ func Compare(older, newer store.Backup) ([]Change, error) {
 			}
 		}
 	}
+	sort.Slice(changes, func(i, j int) bool {
+		if changes[i].Category != changes[j].Category {
+			return changes[i].Category < changes[j].Category
+		}
+		if changes[i].Name != changes[j].Name {
+			return changes[i].Name < changes[j].Name
+		}
+		return changes[i].Type < changes[j].Type
+	})
 	return changes, nil
 }
 
-func indexByName(b store.Backup, cat string) map[string]string {
+func indexByName(b store.Backup, cat string) (map[string]string, error) {
 	out := map[string]string{}
 	files, err := b.Policies(cat)
 	if err != nil {
-		return out
+		return nil, err
 	}
 	for _, f := range files {
 		out[f.Name] = f.Path
 	}
+	return out, nil
+}
+
+func stringSet(values []string) map[string]bool {
+	out := make(map[string]bool, len(values))
+	for _, value := range values {
+		out[value] = true
+	}
 	return out
 }
 
-func equalPolicy(pathA, pathB string) bool {
+func equalPolicy(pathA, pathB string) (bool, error) {
 	rawA, errA := store.Read(pathA)
 	rawB, errB := store.Read(pathB)
-	if errA != nil || errB != nil {
-		return errA == nil && errB == nil
+	if errA != nil {
+		return false, errA
+	}
+	if errB != nil {
+		return false, errB
 	}
 	a, err1 := jsonutil.Normalize(rawA, ignoreKeys)
 	b, err2 := jsonutil.Normalize(rawB, ignoreKeys)
-	if err1 != nil || err2 != nil {
-		return false
+	if err1 != nil {
+		return false, err1
 	}
-	return reflect.DeepEqual(a, b)
+	if err2 != nil {
+		return false, err2
+	}
+	return reflect.DeepEqual(a, b), nil
 }
 
 func severity(cat string, t ChangeType) Severity {

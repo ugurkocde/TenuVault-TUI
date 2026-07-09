@@ -17,9 +17,10 @@ import (
 
 // syncWorkers bounds concurrent policy creates. Intune's write limits are
 // tighter than its read limits, so this must not exceed the backup pool size;
-// a 429/503/504 on a POST is retried with Retry-After by the graph client
-// (Graph rejected the request without applying it, so retrying cannot
-// double-create). Multi-step creates (e.g. admin templates, intents) run all
+// a 429 on a POST is retried with Retry-After by the graph client (Graph
+// rejected the request without applying it, so retrying cannot double-create).
+// Ambiguous 5xx write failures are not retried. Multi-step creates (e.g. admin
+// templates, intents) run all
 // their steps inside policyops.Create, so item-level parallelism never
 // interleaves one item's own steps.
 const syncWorkers = 4

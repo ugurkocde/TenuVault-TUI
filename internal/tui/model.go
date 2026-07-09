@@ -107,6 +107,7 @@ type model struct {
 	frame         int
 	screen        screen
 	prevScreen    screen
+	errorReturn   screen
 	err           error
 	showHelp      bool
 	status        string // transient status message shown above the footer
@@ -171,6 +172,7 @@ type model struct {
 	browseMode    browseMode
 	browseTitle   string
 	browseLoading bool // a backup-dir scan is in flight; don't render stale rows
+	verifyRunning bool
 
 	// detail
 	detail       *store.Backup
@@ -190,6 +192,8 @@ type model struct {
 	diffB       *store.Backup
 	diffChanges []diff.Change
 	diffScroll  int
+	diffLoading bool
+	diffGen     int
 
 	// restore
 	restoreBackup  *store.Backup
@@ -316,7 +320,7 @@ func placeholderTenant(id string) bool {
 // persistConnections saves connection metadata (no tokens) to config. It merges
 // remembered tenants with the currently-live ones by real tenant id, so
 // reconnecting one tenant never drops the others, and drops stale placeholders.
-func (m *model) persistConnections() {
+func (m *model) persistConnections() error {
 	byID := map[string]config.ConnConfig{}
 	var order []string
 	add := func(cc config.ConnConfig) {
@@ -339,7 +343,7 @@ func (m *model) persistConnections() {
 		ccs = append(ccs, byID[id])
 	}
 	m.cfg.Connections = ccs
-	_ = config.Save(m.cfg)
+	return config.Save(m.cfg)
 }
 
 func (m model) Init() tea.Cmd { return tick() }

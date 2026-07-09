@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/ugurkocde/TenuVault-TUI/internal/fileutil"
 )
 
 // WellKnownClientID is the Microsoft Graph PowerShell public client. It carries
@@ -132,7 +134,7 @@ func Save(c Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(Path(), data, 0o600)
+	return fileutil.WriteFileAtomic(Path(), data, 0o600)
 }
 
 func defaultBackupRoot() string {

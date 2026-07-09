@@ -101,8 +101,71 @@ func TestFilterByNames(t *testing.T) {
 // backup dir and the name filter narrows them.
 func TestBackupItemsNameFilterIntegration(t *testing.T) {
 	dir := fixtureBackup(t)
-	items := filterByNames(backupItems(dir, ""), "Beta")
+	all, err := backupItems(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := filterByNames(all, "Beta")
 	if len(items) != 1 || items[0].Name != "Beta" || items[0].Category != "CompliancePolicies" {
 		t.Errorf("items = %+v", items)
+	}
+}
+
+func TestSelectedTypesRejectsUnknownKeys(t *testing.T) {
+	if _, err := selectedTypes("deviceConfigurations,typo"); err == nil {
+		t.Fatal("unknown category key should be rejected")
+	}
+}
+
+func TestSelectedTypesDeduplicatesKeys(t *testing.T) {
+	types, err := selectedTypes("deviceConfigurations,deviceConfigurations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(types) != 1 {
+		t.Fatalf("types=%+v", types)
+	}
+}
+
+func TestSyncDryRunRejectsUnknownCategory(t *testing.T) {
+	t.Setenv("TENUVAULT_SOURCE_TENANT_ID", "")
+	if code := Sync([]string{"--from-backup", fixtureBackup(t), "--categories", "typo", "--dry-run"}); code != 2 {
+		t.Fatalf("exit=%d, want 2", code)
+	}
+}
+
+func TestBackupItemsReportsUnreadableBackup(t *testing.T) {
+	if _, err := backupItems(filepath.Join(t.TempDir(), "missing"), ""); err == nil {
+		t.Fatal("missing backup should return an error")
+	}
+}
+
+func TestCancelledBackupUsesInterruptedExitCode(t *testing.T) {
+	if got := backupExitCode("Cancelled"); got != 130 {
+		t.Fatalf("exit=%d, want 130", got)
+	}
+}
+
+func TestBackupItemsFiltersSharedAppProtectionCategoryByType(t *testing.T) {
+	dir := t.TempDir()
+	cat := filepath.Join(dir, "AppProtectionPolicies")
+	if err := os.MkdirAll(cat, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"iOS":     `{"@odata.type":"#microsoft.graph.iosManagedAppProtection","displayName":"iOS"}`,
+		"Android": `{"@odata.type":"#microsoft.graph.androidManagedAppProtection","displayName":"Android"}`,
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(cat, name+".json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, err := backupItems(dir, "iosAppProtection")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Name != "iOS" {
+		t.Fatalf("items=%+v", items)
 	}
 }

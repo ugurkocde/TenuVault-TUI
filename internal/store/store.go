@@ -7,12 +7,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ugurkocde/TenuVault-TUI/internal/fileutil"
 )
 
 // Metadata is the backup manifest, matching the TenuVault portal runbook shape.
@@ -62,8 +66,15 @@ func List(root string) ([]Backup, error) {
 			continue
 		}
 		b := Backup{Folder: e.Name(), Path: filepath.Join(root, e.Name())}
-		if data, err := os.ReadFile(filepath.Join(b.Path, "metadata.json")); err == nil {
-			_ = json.Unmarshal(data, &b.Meta)
+		data, err := os.ReadFile(filepath.Join(b.Path, "metadata.json"))
+		if os.IsNotExist(err) {
+			continue // metadata is written last and commits a complete backup
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read metadata for %s: %w", b.Folder, err)
+		}
+		if err := json.Unmarshal(data, &b.Meta); err != nil {
+			return nil, fmt.Errorf("decode metadata for %s: %w", b.Folder, err)
 		}
 		backups = append(backups, b)
 	}
@@ -141,7 +152,7 @@ func WriteChecksums(dir string, files map[string]string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, ChecksumsFile), data, 0o644)
+	return fileutil.WriteFileAtomic(filepath.Join(dir, ChecksumsFile), data, 0o644)
 }
 
 // ReadChecksums loads the integrity sidecar of a backup folder.
@@ -180,12 +191,22 @@ func Verify(dir string) (VerifyReport, error) {
 	if err != nil {
 		return VerifyReport{}, err
 	}
+	if !strings.EqualFold(c.Algorithm, "sha256") {
+		return VerifyReport{}, fmt.Errorf("unsupported checksum algorithm %q", c.Algorithm)
+	}
 	var rep VerifyReport
 	for rel, want := range c.Files {
-		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		nativeRel := filepath.FromSlash(rel)
+		if !filepath.IsLocal(nativeRel) {
+			return rep, fmt.Errorf("invalid checksum path %q", rel)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, nativeRel))
 		if err != nil {
-			rep.Missing = append(rep.Missing, rel)
-			continue
+			if os.IsNotExist(err) {
+				rep.Missing = append(rep.Missing, rel)
+				continue
+			}
+			return rep, fmt.Errorf("read %s: %w", rel, err)
 		}
 		sum := sha256.Sum256(data)
 		if hex.EncodeToString(sum[:]) != want {
@@ -197,9 +218,15 @@ func Verify(dir string) (VerifyReport, error) {
 	// A policy file on disk that was never recorded means the backup was
 	// altered after it was written.
 	b := Backup{Path: dir}
-	cats, _ := b.Categories()
+	cats, err := b.Categories()
+	if err != nil {
+		return rep, fmt.Errorf("list backup categories: %w", err)
+	}
 	for _, cat := range cats {
-		files, _ := b.Policies(cat)
+		files, err := b.Policies(cat)
+		if err != nil {
+			return rep, fmt.Errorf("list policies in %s: %w", cat, err)
+		}
 		for _, f := range files {
 			if _, ok := c.Files[cat+"/"+f.Name+".json"]; !ok {
 				rep.Extra = append(rep.Extra, cat+"/"+f.Name+".json")
@@ -218,22 +245,50 @@ func Cleanup(root string, days int) (int, error) {
 	if days <= 0 {
 		return 0, nil
 	}
-	backups, err := List(root)
+	entries, err := os.ReadDir(root)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
 		return 0, err
 	}
 	cutoff := time.Now().AddDate(0, 0, -days)
 	removed := 0
-	for _, b := range backups {
-		ts, err := time.Parse("2006-01-02-150405", strings.TrimPrefix(b.Folder, "backup-"))
+	var removeErrs []error
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "backup-") {
+			continue
+		}
+		ts, err := backupFolderTime(entry.Name())
 		if err != nil {
 			continue
 		}
 		if ts.Before(cutoff) {
-			if err := os.RemoveAll(b.Path); err == nil {
+			path := filepath.Join(root, entry.Name())
+			if err := os.RemoveAll(path); err == nil {
 				removed++
+			} else {
+				removeErrs = append(removeErrs, fmt.Errorf("remove %s: %w", entry.Name(), err))
 			}
 		}
 	}
-	return removed, nil
+	return removed, errors.Join(removeErrs...)
+}
+
+func backupFolderTime(folder string) (time.Time, error) {
+	raw := strings.TrimPrefix(folder, "backup-")
+	if ts, err := time.ParseInLocation("2006-01-02-150405.000000000", raw, time.Local); err == nil {
+		return ts, nil
+	}
+	if dot := strings.IndexByte(raw, '.'); dot >= 0 {
+		if dash := strings.LastIndexByte(raw, '-'); dash > dot {
+			if _, err := strconv.Atoi(raw[dash+1:]); err == nil {
+				raw = raw[:dash]
+				if ts, err := time.ParseInLocation("2006-01-02-150405.000000000", raw, time.Local); err == nil {
+					return ts, nil
+				}
+			}
+		}
+	}
+	return time.ParseInLocation("2006-01-02-150405", raw, time.Local)
 }
