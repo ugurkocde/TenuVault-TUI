@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
 	"github.com/ugurkocde/TenuVault-TUI/internal/config"
 	"github.com/ugurkocde/TenuVault-TUI/internal/connection"
@@ -54,7 +56,7 @@ func seededModel() model {
 // TestRenderAllScreens ensures every screen renders without panicking and
 // produces output at normal and narrow widths, with realistic state seeded in.
 func TestRenderAllScreens(t *testing.T) {
-	for _, w := range []int{40, 60, 100} {
+	for _, w := range []int{40, 46, 60, 88, 112, 160} {
 		m := seededModel()
 		m.width = w
 		for s := screenAuth; s <= screenError; s++ {
@@ -62,6 +64,73 @@ func TestRenderAllScreens(t *testing.T) {
 			out := m.render()
 			if strings.TrimSpace(out) == "" {
 				t.Errorf("screen %d rendered empty at width %d", s, w)
+			}
+		}
+	}
+}
+
+// TestSupportedRenderWidthsFit checks every screen at each responsive
+// breakpoint. Wide terminals may receive centering padding, but no rendered
+// line may ever be wider than the actual terminal.
+func TestSupportedRenderWidthsFit(t *testing.T) {
+	for _, w := range []int{46, 60, 87, 88, 112, 160} {
+		m := seededModel()
+		m.width, m.height = w, 40
+		for s := screenAuth; s <= screenError; s++ {
+			m.screen = s
+			out := m.render()
+			for lineNo, line := range strings.Split(out, "\n") {
+				if got := lipgloss.Width(line); got > w {
+					t.Errorf("screen %d width %d line %d rendered %d columns: %q", s, w, lineNo+1, got, line)
+				}
+			}
+			m.showHelp = true
+			for lineNo, line := range strings.Split(m.render(), "\n") {
+				if got := lipgloss.Width(line); got > w {
+					t.Errorf("help screen %d width %d line %d rendered %d columns: %q", s, w, lineNo+1, got, line)
+				}
+			}
+			m.showHelp = false
+		}
+	}
+}
+
+func TestTooSmallTerminalShowsResizeMessage(t *testing.T) {
+	for _, size := range [][2]int{{45, 30}, {80, 19}, {20, 10}} {
+		m := seededModel()
+		m.width, m.height = size[0], size[1]
+		out := m.render()
+		if !strings.Contains(out, "too small") {
+			t.Fatalf("%dx%d missing resize message", size[0], size[1])
+		}
+		for _, line := range strings.Split(out, "\n") {
+			if got := lipgloss.Width(line); got > size[0] {
+				t.Fatalf("%dx%d resize view line is %d columns", size[0], size[1], got)
+			}
+		}
+	}
+}
+
+func TestDashboardFitsMinimumHeight(t *testing.T) {
+	m := seededModel()
+	m.width, m.height = minUsableWidth, minUsableHeight
+	m.screen = screenDashboard
+	if got := len(strings.Split(m.render(), "\n")); got > minUsableHeight {
+		t.Fatalf("dashboard rendered %d lines at minimum height %d", got, minUsableHeight)
+	}
+}
+
+func TestScreensFitSupportedHeights(t *testing.T) {
+	for _, size := range [][2]int{{46, 20}, {88, 20}, {88, 24}, {112, 32}} {
+		for s := screenAuth; s <= screenError; s++ {
+			m := seededModel()
+			m.width, m.height, m.screen = size[0], size[1], s
+			if got := len(strings.Split(m.render(), "\n")); got > size[1] {
+				t.Errorf("screen %d at %dx%d rendered %d lines", s, size[0], size[1], got)
+			}
+			m.showHelp = true
+			if got := len(strings.Split(m.render(), "\n")); got > size[1] {
+				t.Errorf("help screen %d at %dx%d rendered %d lines", s, size[0], size[1], got)
 			}
 		}
 	}

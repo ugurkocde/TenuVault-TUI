@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"charm.land/lipgloss/v2"
 
@@ -15,30 +14,34 @@ func (m model) width0() int {
 	if m.width == 0 {
 		return 80 // no WindowSizeMsg yet
 	}
-	if m.width < 40 {
-		return 40 // degrade floor: below this mild wrapping beats a broken layout
+	if m.width < 1 {
+		return 1
 	}
 	return m.width
 }
 
 // listRows bounds long views to the terminal height. The fixed allowance covers
-// the header, dividers, status, footer, title, and surrounding blank lines.
+// the shared header/footer, page heading, status line, and surrounding panels.
 func (m model) listRows(preferred int) int {
 	if m.height <= 0 {
 		return preferred
 	}
-	available := m.height - 12
-	if available < 4 {
-		return 4
+	available := m.height - 18
+	if available < 2 {
+		return 2
 	}
 	return min(preferred, available)
 }
 
 func (m model) render() string {
-	w := m.width0()
 	if m.hits != nil {
 		*m.hits = uiHits{}
 	}
+	if m.tooSmall() {
+		return m.viewTooSmall()
+	}
+	terminalW := m.width0()
+	w := m.contentWidth()
 	var body, hints string
 
 	switch m.screen {
@@ -95,20 +98,31 @@ func (m model) render() string {
 		body, hints = m.viewError(w), "enter continue"
 	}
 
-	if m.hits != nil {
-		m.finalizeHits()
-	}
-
 	if m.filterActive {
 		hints = "type to filter · backspace delete · enter keep · esc clear"
 	}
+	if m.showHelp {
+		*m.hits = uiHits{}
+		body = m.helpView(w, hints)
+		hints = "? close help · esc back · ctrl+c force quit"
+	} else if !m.filterActive && m.screen != screenAuthForm {
+		hints += " · ? help"
+	}
 
 	header := m.header(w)
-	footer := m.th.footer.Render(fitHints(hints, w))
-	if m.showHelp {
-		footer = m.th.footer.Render(fitHints("global: ↑/↓ move · enter select · esc back · q quit · ctrl+c force quit · ? help · mouse: click & scroll", w))
+	footer := m.renderFooter(hints, w)
+	content := header + "\n" + divider(w) + "\n\n" + body + "\n\n" + m.statusLine() + divider(w) + "\n" + footer
+	if m.hits != nil {
+		xOffset := 0
+		if terminalW > w {
+			xOffset = (terminalW - w) / 2
+		}
+		m.finalizeHits(strings.Count(content, "\n"), xOffset)
 	}
-	return header + "\n" + divider(w) + "\n\n" + body + "\n\n" + m.statusLine() + divider(w) + "\n" + footer
+	if terminalW > w {
+		return lipgloss.NewStyle().Width(terminalW).Align(lipgloss.Center).Render(content)
+	}
+	return content
 }
 
 // statusLine renders the transient status message above the footer, or "".
@@ -127,7 +141,10 @@ func (m model) statusLine() string {
 }
 
 func (m model) header(w int) string {
-	left := m.th.logo.Render("⬡ TenuVault") + "  " + m.th.crumb.Render("backup & restore")
+	left := m.th.logo.Render("⬡ TenuVault")
+	if w >= 72 {
+		left += "  " + m.th.crumb.Render("Intune backup & recovery")
+	}
 	var right string
 	if m.connected {
 		dot := lipgloss.NewStyle().Foreground(colGreen).Render("●")
@@ -137,7 +154,7 @@ func (m model) header(w int) string {
 		}
 		// Tenant names are admin-controlled and unbounded; keep the header row
 		// from overflowing narrow terminals.
-		maxLabel := w / 3
+		maxLabel := w / 4
 		if maxLabel < 12 {
 			maxLabel = 12
 		}
@@ -146,11 +163,11 @@ func (m model) header(w int) string {
 		if len(m.conns) > 1 {
 			suffix = m.th.crumb.Render(fmt.Sprintf("  +%d", len(m.conns)-1))
 		}
-		right = fmt.Sprintf("%s source: %s%s  %s",
-			dot,
-			m.th.normal.Render(label),
-			suffix,
-			m.th.crumb.Render(time.Now().Format("15:04")))
+		if w >= 72 {
+			right = fmt.Sprintf("%s %s  %s%s", dot, m.th.success.Render("Connected"), m.th.normal.Render(label), suffix)
+		} else {
+			right = dot + " " + m.th.success.Render("Connected")
+		}
 	} else {
 		right = m.th.crumb.Render("not connected")
 	}
@@ -159,18 +176,13 @@ func (m model) header(w int) string {
 
 func (m model) viewAuth(w int) (string, string) {
 	var b strings.Builder
-	b.WriteString(m.th.title.Render("Connect to Microsoft Graph") + "\n")
-	b.WriteString(m.th.dim.Render("Choose how to sign in to your tenant.") + "\n\n")
+	b.WriteString(m.pageHeading("Connect to Microsoft Graph", "Choose how to sign in to your tenant.") + "\n\n")
 	for i, o := range m.authOptions {
-		cur := "  "
-		label := m.th.normal.Render(o.label)
-		if i == m.authCursor {
-			cur = m.th.selected.Render("▸ ")
-			label = m.th.selected.Render(o.label)
-		}
 		m.recordHit(&b, i)
-		b.WriteString(cur + label + "\n")
-		b.WriteString("    " + m.th.dim.Render(o.desc) + "\n")
+		b.WriteString(m.actionRow(o.label, m.keyBadge(fmt.Sprintf("%d", i+1)), w, i == m.authCursor) + "\n")
+		if !m.isShort() {
+			b.WriteString("    " + m.th.dim.Render(truncWidth(o.desc, w-4)) + "\n")
+		}
 	}
 	return b.String(), "↑/↓ move · enter connect · q quit"
 }
@@ -178,47 +190,46 @@ func (m model) viewAuth(w int) (string, string) {
 func (m model) viewConnecting() string {
 	sp := m.th.accent.Render(spinnerFrames[m.frame%len(spinnerFrames)])
 	var b strings.Builder
-	b.WriteString(sp + " " + m.th.title.Render("Signing in…") + "\n\n")
+	b.WriteString(m.pageHeading("Signing in…", "Connecting securely to Microsoft Graph.") + "\n\n")
 	if m.cfg.AuthMethod == config.AuthInteractive {
-		b.WriteString(m.th.dim.Render("Opening your browser to complete sign-in.") + "\n")
+		b.WriteString(sp + " " + m.th.normal.Render("Opening your browser to complete sign-in.") + "\n")
 	} else {
-		b.WriteString(m.th.dim.Render("Authenticating with the app registration…") + "\n")
+		b.WriteString(sp + " " + m.th.normal.Render("Authenticating with the app registration…") + "\n")
 	}
 	return b.String()
 }
 
 func (m model) viewDashboard(w int) string {
-	stacked := w < 60 // two bordered cards need ~60 cols; stack below that
-	cardW := (w-3)/2 - 2
-	if stacked {
-		cardW = w - 4
-	}
-	if cardW < 20 {
-		cardW = 20
-	}
-	tenant := m.th.panel.Width(cardW).Render(strings.Join([]string{
-		m.th.panelLbl.Render("Tenant"),
+	var b strings.Builder
+	b.WriteString(m.pageHeading("Dashboard", "Your tenant is protected and ready.") + "\n\n")
+
+	tenantLines := []string{
 		m.th.normal.Bold(true).Render(emptyDash(m.sourceTenant().DisplayName)),
 		m.th.dim.Render(emptyDash(m.sourceTenant().DefaultDomain)),
 		m.th.cardLabel.Render(fmt.Sprintf("%d verified domains", m.sourceTenant().DomainCount)),
-	}, "\n"))
-
+	}
 	var lastLines []string
-	lastLines = append(lastLines, lipgloss.NewStyle().Foreground(colGreen).Bold(true).Render("Last backup"))
 	if m.lastBackup != nil {
 		lastLines = append(lastLines,
-			m.th.normal.Bold(true).Render(m.lastBackup.Meta.BackupDate),
-			m.th.dim.Render(fmt.Sprintf("%d policies · %d categories", m.lastBackup.Total(), len(m.lastBackup.Meta.ItemCounts))),
-			m.th.success.Render("✔ "+emptyDash(m.lastBackup.Meta.Status)),
+			m.th.normal.Bold(true).Render(formatBackupDate(m.lastBackup.Meta.BackupDate)),
+			m.th.dim.Render(fmt.Sprintf("%d policies · %d %s", m.lastBackup.Total(), len(m.lastBackup.Meta.ItemCounts), plural(len(m.lastBackup.Meta.ItemCounts), "category", "categories"))),
+			m.th.success.Render("✔ "+friendlyBackupStatus(m.lastBackup.Meta.Status)),
 		)
 	} else {
-		lastLines = append(lastLines, m.th.dim.Render("none yet"), "", m.th.cardLabel.Render("run a backup to begin"))
+		lastLines = append(lastLines, m.th.dim.Render("No backups yet"), m.th.cardLabel.Render("Run a backup to begin"), "")
 	}
-	last := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colGreen).Padding(0, 1).Width(cardW).Render(strings.Join(lastLines, "\n"))
-
-	cards := lipgloss.JoinHorizontal(lipgloss.Top, tenant, " ", last)
-	if stacked {
-		cards = lipgloss.JoinVertical(lipgloss.Left, tenant, last)
+	if m.isWide(w) && !m.isShort() {
+		cardW := (w - 1) / 2
+		tenant := m.infoPanel("Tenant", tenantLines, cardW-2, false)
+		last := m.infoPanel("Latest backup", lastLines, cardW-2, true)
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, tenant, " ", last) + "\n\n")
+	} else {
+		b.WriteString(m.sectionLabel("Tenant") + "  " + tenantLines[0] + "\n")
+		b.WriteString(m.sectionLabel("Latest backup") + "  " + lastLines[0])
+		if len(lastLines) > 1 && w >= 72 {
+			b.WriteString("  " + lastLines[1])
+		}
+		b.WriteString("\n\n")
 	}
 
 	menu := []struct{ label, key string }{
@@ -230,19 +241,10 @@ func (m model) viewDashboard(w int) string {
 		{"Tenants", "t"},
 		{"Settings", "s"},
 	}
-	var b strings.Builder
-	b.WriteString(cards + "\n\n")
-	b.WriteString(m.th.cardLabel.Render("Quick actions") + "\n")
+	b.WriteString(m.sectionLabel("Quick actions") + "\n")
 	for i, it := range menu {
-		marker := m.th.dim.Render("▸")
-		label := m.th.normal.Render(it.label)
-		if i == m.dashCursor {
-			marker = m.th.selected.Render("▸")
-			label = m.th.selected.Render(it.label)
-		}
-		row := marker + " " + label
 		m.recordHit(&b, i)
-		b.WriteString(spread(row, m.th.key.Render(it.key), w) + "\n")
+		b.WriteString(m.actionRow(it.label, m.keyBadge(it.key), w, i == m.dashCursor) + "\n")
 	}
 	return b.String()
 }
@@ -250,13 +252,6 @@ func (m model) viewDashboard(w int) string {
 func (m model) viewBackupSelect(w int) string {
 	var b strings.Builder
 	visible := m.catsVisible()
-	pos := 0
-	if len(visible) > 0 {
-		pos = filteredPos(m.catCursor, visible) + 1
-	}
-	b.WriteString(m.th.crumb.Render("Dashboard › Back up now") + "  " +
-		m.th.cardLabel.Render(fmt.Sprintf("(%d/%d)", pos, len(visible))) + "\n\n")
-	b.WriteString(m.filterLine(len(visible), len(m.cats)))
 
 	selected := 0
 	for _, c := range m.cats {
@@ -264,9 +259,21 @@ func (m model) viewBackupSelect(w int) string {
 			selected++
 		}
 	}
+	b.WriteString(m.pageHeading("Dashboard / Back up now", "Choose the Intune configuration you want to protect.") + "\n")
+	b.WriteString(m.th.accent.Render(fmt.Sprintf("%d of %d selected", selected, len(m.cats))) + "\n")
+	if m.filterActive || m.filterQuery != "" {
+		b.WriteString(m.filterLine(len(visible), len(m.cats)))
+	} else if m.isShort() {
+		m.recordBodyAction(strings.Count(b.String(), "\n"), 1, w, "/")
+		b.WriteString(m.th.cardLabel.Render("/  Filter categories") + "\n")
+	} else {
+		filter := m.th.panel.Width(w - 2).Render(m.th.cardLabel.Render("/  Filter categories"))
+		m.recordBodyAction(strings.Count(b.String(), "\n"), len(strings.Split(filter, "\n")), w, "/")
+		b.WriteString(filter + "\n")
+	}
 
 	// Window the long list around the cursor; print group headers inline.
-	start, end := window(filteredPos(m.catCursor, visible), len(visible), m.listRows(16))
+	start, end := window(filteredPos(m.catCursor, visible), len(visible), m.listRows(12))
 	lastGroup := ""
 	for vp := start; vp < end; vp++ {
 		i := visible[vp]
@@ -275,38 +282,37 @@ func (m model) viewBackupSelect(w int) string {
 			if lastGroup != "" {
 				b.WriteString("\n")
 			}
-			b.WriteString(m.th.cardLabel.Render(c.pt.Group) + "\n")
+			b.WriteString(m.sectionLabel(c.pt.Group) + "\n")
 			lastGroup = c.pt.Group
-		}
-		box := m.th.dim.Render("[ ]")
-		if c.sel {
-			box = m.th.success.Render("[x]")
-		}
-		label := m.th.normal.Render(c.pt.Friendly)
-		if i == m.catCursor {
-			label = m.th.selected.Render(c.pt.Friendly)
 		}
 		tag := ""
 		if !c.pt.RestoreSupported {
-			tag = "  " + m.th.cardLabel.Render("· backup-only")
+			tag = "backup-only"
 		} else if !c.pt.Verified {
-			tag = "  " + m.th.cardLabel.Render("· unverified")
+			tag = "unverified"
+		} else {
+			tag = "verified"
 		}
 		m.recordHit(&b, i)
-		b.WriteString("  " + box + " " + label + tag + "\n")
+		b.WriteString(m.checkRow(c.sel, c.pt.Friendly, tag, w, i == m.catCursor) + "\n")
 	}
 	if sb := m.scrollbar(start, end, len(visible)); sb != "" {
 		b.WriteString("  " + sb + "\n")
 	}
-	b.WriteString("\n" + m.th.accent.Render(fmt.Sprintf("%d of %d selected", selected, len(m.cats))))
-	b.WriteString("  " + m.th.cardLabel.Render("→ "+m.cfg.BackupRoot))
+	b.WriteString("\n" + m.th.cardLabel.Render("Destination  ") + m.th.accent.Render(compactPath(m.cfg.BackupRoot)))
 	return b.String()
 }
 
 func (m model) viewProgress(w int) (string, string) {
 	var b strings.Builder
-	b.WriteString(m.th.title.Render(m.progTitle) + "  " + m.th.crumb.Render(m.sourceTenant().DisplayName) + "\n\n")
-	for _, cat := range m.progOrder {
+	b.WriteString(m.pageHeading(m.progTitle, "Tenant: "+m.sourceTenant().DisplayName) + "\n\n")
+	b.WriteString(m.sectionLabel("Progress") + "\n")
+	limit := min(len(m.progOrder), m.listRows(12))
+	start := max(0, len(m.progOrder)-limit)
+	if start > 0 {
+		b.WriteString(m.th.cardLabel.Render(fmt.Sprintf("… %d earlier categories", start)) + "\n")
+	}
+	for _, cat := range m.progOrder[start:] {
 		var icon string
 		switch m.progEvents[cat] {
 		case "done":
@@ -316,7 +322,7 @@ func (m model) viewProgress(w int) (string, string) {
 		default:
 			icon = m.th.inProg.Render(spinnerFrames[m.frame%len(spinnerFrames)])
 		}
-		b.WriteString("  " + icon + " " + m.th.normal.Render(m.progFriendly[cat]) + "\n")
+		b.WriteString("  " + icon + "  " + m.th.normal.Render(m.progFriendly[cat]) + "\n")
 	}
 	b.WriteString("\n")
 	if !m.progDone {
@@ -324,8 +330,8 @@ func (m model) viewProgress(w int) (string, string) {
 		if m.progTot > 0 {
 			frac = float64(m.progCur) / float64(m.progTot)
 		}
-		b.WriteString("  " + m.th.inProg.Render(emptyDash(m.progActive)) + "\n")
-		b.WriteString("  " + progBar(frac, min(40, w-20)) + fmt.Sprintf("  %d/%d", m.progCur, m.progTot) + "\n")
+		b.WriteString(m.th.inProg.Render(emptyDash(m.progActive)) + "\n")
+		b.WriteString(progBar(frac, min(56, w-12)) + fmt.Sprintf("  %d/%d", m.progCur, m.progTot) + "\n")
 		return b.String(), "x / esc cancel backup · ctrl+c quit"
 	}
 	if m.progErr != nil {
@@ -344,9 +350,9 @@ func (m model) viewProgress(w int) (string, string) {
 	}
 	for _, c := range m.progCats {
 		if c.Failed {
-			b.WriteString("    " + m.th.danger.Render("✗ "+c.Category) + " " + m.th.dim.Render(trunc(c.Error, 60)) + "\n")
+			b.WriteString("    " + m.th.danger.Render("✗ "+friendlyCategory(c.Category)) + " " + m.th.dim.Render(trunc(c.Error, 60)) + "\n")
 		} else if c.Warnings > 0 {
-			b.WriteString("    " + m.th.warn.Render(fmt.Sprintf("⚠ %s — %d saved, %d incomplete", c.Category, c.Count, c.Warnings)) + "\n")
+			b.WriteString("    " + m.th.warn.Render(fmt.Sprintf("⚠ %s — %d saved, %d incomplete", friendlyCategory(c.Category), c.Count, c.Warnings)) + "\n")
 		}
 	}
 	return b.String(), "enter continue"
@@ -354,7 +360,11 @@ func (m model) viewProgress(w int) (string, string) {
 
 func (m model) viewBrowse(w int) (string, string) {
 	var b strings.Builder
-	b.WriteString(m.th.crumb.Render(m.browseTitle) + m.sortTag() + "\n")
+	title := m.browseTitle
+	if title == "" {
+		title = "Browse backups"
+	}
+	b.WriteString(m.pageHeading("Dashboard / "+title, "Review, verify, or restore a saved tenant snapshot.") + m.sortTag() + "\n")
 	if m.diffA != nil && m.browseMode == modeDiffB {
 		b.WriteString(m.th.dim.Render("baseline: "+m.diffA.Folder) + "\n")
 	}
@@ -372,22 +382,48 @@ func (m model) viewBrowse(w int) (string, string) {
 		return b.String(), "esc back"
 	}
 	visible := m.browseVisible()
-	start, end := window(filteredPos(m.browseCursor, visible), len(visible), m.listRows(12))
-	for vp := start; vp < end; vp++ {
-		i := visible[vp]
-		bk := m.backups[i]
-		marker := "  "
-		name := m.th.normal.Render(bk.Folder)
-		if i == m.browseCursor {
-			marker = m.th.selected.Render("▸ ")
-			name = m.th.selected.Render(bk.Folder)
+	start, end := window(filteredPos(m.browseCursor, visible), len(visible), m.listRows(10))
+	if m.isWide(w) {
+		leftW := w / 2
+		rightW := w - leftW - 1
+		var list strings.Builder
+		list.WriteString(m.sectionLabel(fmt.Sprintf("Backups  %d", len(visible))) + "\n")
+		base := strings.Count(b.String(), "\n") + 1 // bordered panel top edge
+		for vp := start; vp < end; vp++ {
+			i := visible[vp]
+			bk := m.backups[i]
+			m.recordHitAt(base+strings.Count(list.String(), "\n"), i)
+			label := formatBackupDate(bk.Meta.BackupDate)
+			right := fmt.Sprintf("%d · %s", bk.Total(), shortBackupStatus(bk.Meta.Status))
+			// The panel consumes four columns for its border and padding. Keep
+			// one additional column for actionRow's leading focus indicator.
+			list.WriteString(m.actionRow(label, right, leftW-5, i == m.browseCursor) + "\n")
 		}
-		meta := m.th.dim.Render(fmt.Sprintf("  %d policies · %s", bk.Total(), emptyDash(bk.Meta.Status)))
-		m.recordHit(&b, i)
-		b.WriteString(marker + name + meta + "\n")
-	}
-	if sb := m.scrollbar(start, end, len(visible)); sb != "" {
-		b.WriteString("  " + sb + "\n")
+		if sb := m.scrollbar(start, end, len(visible)); sb != "" {
+			list.WriteString(" " + sb)
+		}
+		left := m.th.panel.Width(leftW - 2).Render(list.String())
+		selected := m.backups[m.browseCursor]
+		details := []string{
+			m.th.normal.Bold(true).Render(emptyDash(selected.Meta.TenantName)),
+			m.th.normal.Render(formatBackupDate(selected.Meta.BackupDate)),
+			m.th.cardLabel.Render(selected.Folder),
+			m.th.dim.Render("Duration    " + emptyDash(selected.Meta.Duration)),
+			m.th.dim.Render(fmt.Sprintf("Policies    %d", selected.Total())),
+			m.th.dim.Render(fmt.Sprintf("Categories  %d", len(selected.Meta.ItemCounts))),
+			m.th.success.Render("✔ " + friendlyBackupStatus(selected.Meta.Status)),
+			m.th.cardLabel.Render("Press V to verify integrity"),
+		}
+		right := m.infoPanel("Backup details", details, rightW-2, false)
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right))
+	} else {
+		b.WriteString(m.sectionLabel(fmt.Sprintf("Backups  %d", len(visible))) + "\n")
+		for vp := start; vp < end; vp++ {
+			i := visible[vp]
+			bk := m.backups[i]
+			m.recordHit(&b, i)
+			b.WriteString(m.actionRow(formatBackupDate(bk.Meta.BackupDate), fmt.Sprintf("%d · %s", bk.Total(), shortBackupStatus(bk.Meta.Status)), w, i == m.browseCursor) + "\n")
+		}
 	}
 	return b.String(), "↑/↓ move · s sort · enter select · esc back"
 }
@@ -397,38 +433,45 @@ func (m model) viewBrowseDetail(w int) string {
 	if m.detail == nil {
 		return ""
 	}
-	b.WriteString(m.th.crumb.Render("Browse › "+m.detail.Folder) + "\n\n")
-	b.WriteString(m.th.dim.Render(fmt.Sprintf("date %s · duration %s · status %s",
-		emptyDash(m.detail.Meta.BackupDate), emptyDash(m.detail.Meta.Duration), emptyDash(m.detail.Meta.Status))) + "\n")
-	if m.detail.Meta.TenantName != "" {
-		b.WriteString(m.th.dim.Render("tenant "+m.detail.Meta.TenantName) + "\n")
+	b.WriteString(m.pageHeading("Browse / Backup details", formatBackupDate(m.detail.Meta.BackupDate)) + "\n\n")
+	meta := []string{
+		m.th.normal.Bold(true).Render(emptyDash(m.detail.Meta.TenantName)),
+		m.th.dim.Render("Folder      " + m.detail.Folder),
+		m.th.dim.Render("Duration    " + emptyDash(m.detail.Meta.Duration)),
+		m.th.dim.Render(fmt.Sprintf("Policies    %d", m.detail.Total())),
+		m.th.success.Render("✔ " + friendlyBackupStatus(m.detail.Meta.Status)),
 	}
 	if m.verifyRunning {
-		b.WriteString(m.th.inProg.Render(spinnerFrames[m.frame%len(spinnerFrames)]+" verifying integrity…") + "\n")
+		meta = append(meta, m.th.inProg.Render(spinnerFrames[m.frame%len(spinnerFrames)]+" verifying integrity…"))
 	}
-	b.WriteString("\n")
-	for i, c := range m.detailCats {
-		label := m.th.normal.Render(c.name)
-		marker := "  "
-		if i == m.detailCursor {
-			label = m.th.selected.Render(c.name)
-			marker = m.th.selected.Render("▸ ")
-		}
+	b.WriteString(m.infoPanel("Backup details", meta, min(w-2, 64), false) + "\n\n")
+	b.WriteString(m.sectionLabel("Categories") + "\n")
+	start, end := window(m.detailCursor, len(m.detailCats), m.listRows(12))
+	for i := start; i < end; i++ {
+		c := m.detailCats[i]
 		m.recordHit(&b, i)
-		b.WriteString(spread(marker+label, m.th.accent.Render(fmt.Sprintf("%d", c.count)), w/2) + "\n")
+		b.WriteString(m.actionRow(friendlyCategory(c.name), fmt.Sprintf("%d policies", c.count), min(w, 72), i == m.detailCursor) + "\n")
+	}
+	if sb := m.scrollbar(start, end, len(m.detailCats)); sb != "" {
+		b.WriteString(" " + sb + "\n")
 	}
 	return b.String()
 }
 
 func (m model) viewCategoryPolicies(w int) string {
 	var b strings.Builder
-	b.WriteString(m.th.crumb.Render("Browse › "+m.catName) + m.sortTag() + "\n\n")
+	b.WriteString(m.pageHeading("Browse / "+m.catName, "Open a policy to inspect its captured JSON.") + m.sortTag() + "\n\n")
 	if len(m.catPolicies) == 0 {
 		b.WriteString(m.th.dim.Render("No policies in this category."))
 		return b.String()
 	}
 	visible := m.catPoliciesVisible()
-	b.WriteString(m.filterLine(len(visible), len(m.catPolicies)))
+	if m.filterActive || m.filterQuery != "" {
+		b.WriteString(m.filterLine(len(visible), len(m.catPolicies)))
+	} else {
+		m.recordBodyAction(strings.Count(b.String(), "\n"), 1, w, "/")
+		b.WriteString(m.th.cardLabel.Render("/  Filter policies") + "\n")
+	}
 	if len(visible) == 0 {
 		return b.String()
 	}
@@ -436,14 +479,8 @@ func (m model) viewCategoryPolicies(w int) string {
 	for vp := start; vp < end; vp++ {
 		i := visible[vp]
 		p := m.catPolicies[i]
-		marker := "  "
-		name := m.th.normal.Render(p.Name)
-		if i == m.policyCursor {
-			marker = m.th.selected.Render("▸ ")
-			name = m.th.selected.Render(p.Name)
-		}
 		m.recordHit(&b, i)
-		b.WriteString(marker + name + "\n")
+		b.WriteString(m.actionRow(p.Name, "", w, i == m.policyCursor) + "\n")
 	}
 	if sb := m.scrollbar(start, end, len(visible)); sb != "" {
 		b.WriteString("  " + sb + "\n")
@@ -457,7 +494,7 @@ func (m model) viewPolicyView(w int) string {
 	if len(m.catPolicies) > 0 && m.policyCursor < len(m.catPolicies) {
 		name = m.catPolicies[m.policyCursor].Name
 	}
-	b.WriteString(m.th.crumb.Render(m.catName+" › "+name) + "\n\n")
+	b.WriteString(m.pageHeading(m.catName+" / "+name, "Captured policy JSON · read only") + "\n\n")
 	if len(m.policyLines) == 0 {
 		b.WriteString(m.th.dim.Render("(empty)"))
 		return b.String()
@@ -468,7 +505,7 @@ func (m model) viewPolicyView(w int) string {
 		end = len(m.policyLines)
 	}
 	for i := start; i < end; i++ {
-		b.WriteString(m.th.dim.Render(m.policyLines[i]) + "\n")
+		b.WriteString(m.th.dim.Render(truncWidth(m.policyLines[i], w-2)) + "\n")
 	}
 	b.WriteString("\n" + m.th.cardLabel.Render(fmt.Sprintf("lines %d–%d of %d", start+1, end, len(m.policyLines))))
 	return b.String()
@@ -476,68 +513,89 @@ func (m model) viewPolicyView(w int) string {
 
 func (m model) viewSettings(w int) string {
 	var b strings.Builder
-	b.WriteString(m.th.crumb.Render("Settings") + "\n\n")
-	rows := []struct {
+	b.WriteString(m.pageHeading("Dashboard / Settings", "Configure backup behavior and local storage.") + "\n\n")
+	var panel strings.Builder
+	panel.WriteString(m.sectionLabel("Backups") + "\n")
+	settings := []struct {
 		label, value string
 	}{
 		{"Include assignments in backups", onOff(m.cfg.IncludeAssignments)},
 		{"Retention (days, 0 = keep all)", fmt.Sprintf("%d", m.cfg.RetentionDays)},
 	}
-	for i, r := range rows {
-		marker := "  "
-		label := m.th.normal.Render(r.label)
-		if i == m.settingsCursor {
-			marker = m.th.selected.Render("▸ ")
-			label = m.th.selected.Render(r.label)
-		}
-		m.recordHit(&b, i)
-		b.WriteString(spread(marker+label, m.th.accent.Render(r.value), min(w, 70)) + "\n")
+	for i, r := range settings {
+		m.recordHitAt(strings.Count(b.String(), "\n")+1+strings.Count(panel.String(), "\n"), i)
+		panel.WriteString(m.actionRow(r.label, r.value, min(w-4, 84), i == m.settingsCursor) + "\n")
 	}
-	b.WriteString("\n" + m.th.cardLabel.Render("backups → "+m.cfg.BackupRoot))
-	b.WriteString("\n" + m.th.cardLabel.Render("config  → "+config.Path()))
+	if !m.isShort() {
+		panel.WriteString("\n" + m.th.cardLabel.Render("Backup location  ") + m.th.accent.Render(compactPath(m.cfg.BackupRoot)))
+		panel.WriteString("\n" + m.th.cardLabel.Render("Config           ") + m.th.dim.Render(compactPath(config.Path())))
+		panel.WriteString("\n\n" + m.th.success.Render("✔ Settings are saved automatically"))
+	}
+	b.WriteString(m.th.panel.Width(min(w-2, 88)).Render(panel.String()))
+	if m.isShort() {
+		b.WriteString("\n" + m.th.cardLabel.Render("Backups  ") + m.th.accent.Render(truncWidth(compactPath(m.cfg.BackupRoot), w-10)))
+	}
 	return b.String()
 }
 
 func onOff(b bool) string {
 	if b {
-		return "on"
+		return "On"
 	}
-	return "off"
+	return "Off"
 }
 
 func (m model) viewDiffResult(w int) string {
 	var b strings.Builder
-	b.WriteString(m.th.crumb.Render("Compare") + "\n")
+	b.WriteString(m.pageHeading("Dashboard / Compare / Drift report", "Configuration changes between two tenant snapshots.") + "\n")
 	if m.diffA != nil && m.diffB != nil {
 		older, newer := orderBackups(m.diffA, m.diffB)
-		b.WriteString(m.th.dim.Render(older.Folder+"  →  "+newer.Folder) + "\n\n")
+		b.WriteString(m.th.dim.Render(formatBackupDate(older.Meta.BackupDate)+"  →  "+formatBackupDate(newer.Meta.BackupDate)) + "\n\n")
 	}
 	if len(m.diffChanges) == 0 {
 		b.WriteString(m.th.success.Render("No drift. The two backups are identical."))
 		return b.String()
 	}
-	b.WriteString(m.th.normal.Render(fmt.Sprintf("%d changes", len(m.diffChanges))) + "\n\n")
+	added, removed, changed := 0, 0, 0
+	for _, c := range m.diffChanges {
+		switch c.Type {
+		case diff.Added:
+			added++
+		case diff.Removed:
+			removed++
+		default:
+			changed++
+		}
+	}
+	if m.isWide(w) {
+		cardW := (w - 2) / 3
+		c1 := m.th.panelWarn.Width(cardW - 2).Render(m.th.warn.Bold(true).Render(fmt.Sprintf("~  %d CHANGED", changed)))
+		c2 := m.th.panelGood.Width(cardW - 2).Render(m.th.success.Bold(true).Render(fmt.Sprintf("+  %d ADDED", added)))
+		c3 := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colRed).Padding(0, 1).Width(cardW - 2).Render(m.th.danger.Bold(true).Render(fmt.Sprintf("−  %d REMOVED", removed)))
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, c1, " ", c2, " ", c3) + "\n\n")
+	} else {
+		b.WriteString(m.th.warn.Render(fmt.Sprintf("%d changed", changed)) + "   " + m.th.success.Render(fmt.Sprintf("%d added", added)) + "   " + m.th.danger.Render(fmt.Sprintf("%d removed", removed)) + "\n\n")
+	}
+	b.WriteString(m.sectionLabel(fmt.Sprintf("%d configuration changes", len(m.diffChanges))) + "\n")
 	start, end := window(m.diffScroll, len(m.diffChanges), m.listRows(12))
 	for i := start; i < end; i++ {
 		c := m.diffChanges[i]
-		b.WriteString("  " + sevStyle(m.th, c.Severity).Render(sevBullet(c.Type)) + " " +
-			m.th.dim.Render(string(c.Type)) + " " +
-			m.th.cardLabel.Render(c.Category+" /") + " " +
-			m.th.normal.Render(c.Name) + "\n")
+		kind := strings.ToUpper(string(c.Type[:1])) + string(c.Type[1:])
+		label := fmt.Sprintf("%s  %s / %s", kind, friendlyCategory(c.Category), c.Name)
+		b.WriteString(" " + sevStyle(m.th, c.Severity).Render(sevBullet(c.Type)) + " " + m.th.normal.Render(truncWidth(label, w-6)) + "\n")
 	}
+	b.WriteString("\n" + m.th.success.Render(truncWidth("ⓘ Create-only restore available; existing tenant policies will not be overwritten.", w)))
 	return b.String()
 }
 
 func (m model) viewRestorePick(w int) string {
 	var b strings.Builder
-	title := "Restore"
+	title := "Dashboard / Restore policies"
 	if m.syncMode {
-		title = "Sync · pick policies"
+		title = "Sync / Pick policies"
 	}
-	if m.restoreBackup != nil {
-		title += " · " + m.restoreBackup.Folder
-	}
-	crumb := m.th.crumb.Render(title)
+	subtitle := "Choose policies that will be created in " + emptyDash(m.sourceTenant().DisplayName) + "."
+	crumb := m.pageHeading(title, subtitle)
 	if m.syncMode {
 		crumb += "  " + m.th.cardLabel.Render("step 3 of 6")
 	}
@@ -553,7 +611,12 @@ func (m model) viewRestorePick(w int) string {
 		}
 	}
 	visible := m.restoreVisible()
-	b.WriteString(m.filterLine(len(visible), len(m.restoreItems)))
+	if m.filterActive || m.filterQuery != "" {
+		b.WriteString(m.filterLine(len(visible), len(m.restoreItems)))
+	} else {
+		m.recordBodyAction(strings.Count(b.String(), "\n"), 1, w, "/")
+		b.WriteString(m.th.cardLabel.Render("/  Filter policies") + "\n")
+	}
 	if len(visible) == 0 {
 		return b.String()
 	}
@@ -561,42 +624,36 @@ func (m model) viewRestorePick(w int) string {
 	for vp := start; vp < end; vp++ {
 		i := visible[vp]
 		r := m.restoreItems[i]
-		box := m.th.dim.Render("[ ]")
-		if r.sel {
-			box = m.th.success.Render("[x]")
-		}
-		name := m.th.normal.Render(r.item.Name)
-		if i == m.restoreCursor {
-			name = m.th.selected.Render(r.item.Name)
-		}
 		m.recordHit(&b, i)
-		b.WriteString(box + " " + m.th.cardLabel.Render(r.item.Category) + "  " + name + "\n")
+		b.WriteString(m.checkRow(r.sel, r.item.Name, friendlyCategory(r.item.Category), w, i == m.restoreCursor) + "\n")
 	}
 	if sb := m.scrollbar(start, end, len(visible)); sb != "" {
 		b.WriteString("  " + sb + "\n")
 	}
 	b.WriteString("\n" + m.th.accent.Render(fmt.Sprintf("%d of %d selected", selected, len(m.restoreItems))))
+	if w >= 72 {
+		b.WriteString("  " + m.th.success.Render("Creates new policies only") + "  " + m.th.cardLabel.Render("Existing policies stay untouched"))
+	} else {
+		b.WriteString("  " + m.th.success.Render("Create-only") + "\n" + m.th.cardLabel.Render("Existing policies stay untouched"))
+	}
 	return b.String()
 }
 
 func (m model) viewRestoreConfirm(w int) string {
 	var b strings.Builder
-	b.WriteString(m.th.crumb.Render("Restore · confirm") + "\n\n")
+	b.WriteString(m.pageHeading("Restore / Review", "Confirm the create-only restore plan.") + "\n\n")
 	items := m.selectedRestoreItems()
-	b.WriteString(m.th.dim.Render(fmt.Sprintf("These %d policies will be ", len(items))) +
-		m.th.success.Render("created") + m.th.dim.Render(" in ") + m.th.normal.Render(m.sourceTenant().DisplayName) + "\n\n")
+	b.WriteString(m.th.dim.Render(fmt.Sprintf("Policies selected: %d", len(items))) + "\n")
+	b.WriteString(m.th.success.Render("Create new policies") + m.th.dim.Render(" in ") + m.th.normal.Render(truncWidth(m.sourceTenant().DisplayName, max(8, w-24))) + "\n\n")
 	hasCA := false
-	limit := len(items)
-	if limit > 10 {
-		limit = 10
-	}
+	limit := min(len(items), m.listRows(10))
 	for i := 0; i < limit; i++ {
 		it := items[i]
 		if it.Category == "ConditionalAccessPolicies" {
 			hasCA = true
 		}
 		b.WriteString("  " + m.th.success.Render("+") + " " + m.th.normal.Render("[Restored] "+it.Name) +
-			" " + m.th.cardLabel.Render("· "+it.Category) + "\n")
+			" " + m.th.cardLabel.Render("· "+friendlyCategory(it.Category)) + "\n")
 	}
 	if len(items) > limit {
 		b.WriteString("  " + m.th.dim.Render(fmt.Sprintf("… and %d more", len(items)-limit)) + "\n")
@@ -618,20 +675,29 @@ func (m model) viewRestoreConfirm(w int) string {
 
 func (m model) viewRestoreResult(w int) string {
 	var b strings.Builder
-	b.WriteString(m.th.crumb.Render("Restore · results") + "\n\n")
+	b.WriteString(m.pageHeading("Restore / Results", "Policies created in "+emptyDash(m.sourceTenant().DisplayName)+".") + "\n\n")
 	ok, fail := 0, 0
 	for _, r := range m.restoreResults {
 		if r.Err != nil {
 			fail++
+		} else {
+			ok++
+		}
+	}
+	limit := min(len(m.restoreResults), m.listRows(12))
+	for _, r := range m.restoreResults[:limit] {
+		if r.Err != nil {
 			b.WriteString("  " + m.th.danger.Render("✗") + " " + m.th.normal.Render(r.Item.Name) + "  " +
 				m.th.dim.Render(trunc(r.Err.Error(), 50)) + "\n")
 		} else {
-			ok++
 			b.WriteString("  " + m.th.success.Render("✔") + " " + m.th.normal.Render("[Restored] "+r.Item.Name) + "\n")
 			if r.Warn {
 				b.WriteString("    " + m.th.warn.Render("⚠ created with partial content") + "\n")
 			}
 		}
+	}
+	if len(m.restoreResults) > limit {
+		b.WriteString("  " + m.th.dim.Render(fmt.Sprintf("… and %d more results", len(m.restoreResults)-limit)) + "\n")
 	}
 	b.WriteString("\n" + m.th.accent.Render(fmt.Sprintf("%d succeeded, %d failed", ok, fail)))
 	return b.String()
@@ -639,7 +705,7 @@ func (m model) viewRestoreResult(w int) string {
 
 func (m model) viewError(w int) string {
 	var b strings.Builder
-	b.WriteString(m.th.danger.Bold(true).Render("Something went wrong") + "\n\n")
+	b.WriteString(m.pageHeading("Something went wrong", "TenuVault could not finish the requested action.") + "\n\n")
 	if m.err != nil {
 		b.WriteString(lipgloss.NewStyle().Foreground(colText).Width(min(w, 100)).Render(m.err.Error()))
 	}
@@ -647,22 +713,6 @@ func (m model) viewError(w int) string {
 }
 
 // --- helpers ---
-
-// fitHints truncates a footer hint line to the render width, dropping whole
-// "·"-separated segments from the end first.
-func fitHints(hints string, w int) string {
-	if lipgloss.Width(hints) <= w {
-		return hints
-	}
-	parts := strings.Split(hints, " · ")
-	for len(parts) > 1 {
-		parts = parts[:len(parts)-1]
-		if joined := strings.Join(parts, " · "); lipgloss.Width(joined) <= w {
-			return joined
-		}
-	}
-	return trunc(parts[0], w-1)
-}
 
 func spread(left, right string, width int) string {
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)

@@ -115,8 +115,24 @@ func TestErrorReturnsToOriginatingScreen(t *testing.T) {
 
 func TestListRowsUsesTerminalHeight(t *testing.T) {
 	m := New(testConfig(t))
-	m.height = 18
+	m.height = 24
 	if got := m.listRows(16); got != 6 {
 		t.Fatalf("listRows=%d, want 6", got)
+	}
+}
+
+func TestQOnlyQuitsFromTopLevelScreens(t *testing.T) {
+	m := New(testConfig(t))
+	m.connected = true
+	m.screen = screenSettings
+	next, cmd := m.handleKey("q")
+	if cmd != nil || next.(model).screen != screenSettings {
+		t.Fatal("q should not quit or navigate from a nested screen")
+	}
+
+	m.screen = screenDashboard
+	_, cmd = m.handleKey("q")
+	if cmd == nil {
+		t.Fatal("q should quit from the dashboard")
 	}
 }

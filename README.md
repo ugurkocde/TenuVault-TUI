@@ -15,13 +15,38 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="TenuVault TUI dashboard" width="820">
+  <img src="docs/demo.gif" alt="Taking a first backup in the TenuVault TUI" width="930">
 </p>
 
 TenuVault stores portable, per-policy JSON backups locally. It supports 27
 Intune policy types, interactive or app-registration authentication, offline
 integrity/drift checks, create-only restore, and live or backup-based tenant
 sync. It is a single Go binary with no database or service to deploy.
+
+## Interface tour
+
+These are captures of the real terminal renderer at 114 × 26 cells. The tenant
+names and policy data are fictional; the layouts, controls, responsive behavior,
+and progress states are the ones in the shipped application.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshot.png" alt="TenuVault dashboard" width="440"><br><strong>Dashboard</strong></td>
+    <td width="50%"><img src="docs/backup.png" alt="Choose Intune policy types to back up" width="440"><br><strong>Back up now</strong></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/browse.png" alt="Browse saved TenuVault backups" width="440"><br><strong>Browse backups</strong></td>
+    <td width="50%"><img src="docs/compare.png" alt="TenuVault drift comparison report" width="440"><br><strong>Compare and drift</strong></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/restore.png" alt="Select policies for a create-only restore" width="440"><br><strong>Restore policies</strong></td>
+    <td width="50%"><img src="docs/sync.png" alt="Select policy types to sync to another tenant" width="440"><br><strong>Sync tenants</strong></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/tenants.png" alt="Manage connected Microsoft Entra tenants" width="440"><br><strong>Tenants</strong></td>
+    <td width="50%"><img src="docs/settings.png" alt="Configure TenuVault backup settings" width="440"><br><strong>Settings</strong></td>
+  </tr>
+</table>
 
 ## What it does
 
@@ -65,6 +90,11 @@ manually downloaded ZIP. The module requires 64-bit Windows, works in Windows
 PowerShell 5.1 and PowerShell 7+, and runs on Windows ARM64 through x64
 emulation. Use Windows Terminal, `pwsh`, or a console window for the TUI; the
 PowerShell ISE supports headless commands only.
+
+For the full two-column dashboard, use a terminal of at least 88 columns and
+24 rows. TenuVault also provides a compact layout down to 46 columns by 20
+rows; below that it displays a resize prompt instead of allowing the interface
+to wrap or clip.
 
 ### macOS
 
@@ -115,11 +145,17 @@ Interactive-launch flags:
 | `-version` | Print the binary version |
 
 Main keys: `b` backup, `l` browse, `d` compare, `r` restore, `y` sync, `t`
-tenants, `s` settings, arrows/`j`/`k` move, `space` toggles, `/` filters, `s`
-sorts a list, `enter` selects, `esc` goes back, `q` quits, and `?` opens help.
-Use `v` to verify a selected backup, `e` to export comparison/restore/sync
-results as JSON, and `x` to cancel an active operation. The mouse and wheel are
-supported.
+tenants, and `s` settings from the dashboard. Arrows or `j`/`k` move,
+`space` toggles, `/` filters, `s` sorts a list, `enter` selects, `esc` goes
+back, and `?` opens contextual help. Use `v` to verify a selected backup, `e`
+to export comparison/restore/sync results as JSON, and `x` to cancel an active
+operation. `q` quits from the dashboard or initial sign-in screen; `Ctrl+C`
+always exits.
+
+The interface is fully usable with either keyboard or mouse. Click rows and
+footer actions, use the wheel to move through lists, and click form fields to
+focus them. When mouse support is active, hold `Shift` while dragging if you
+want to select terminal text.
 
 ## Policy coverage
 

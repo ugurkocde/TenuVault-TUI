@@ -56,6 +56,93 @@ func TestMouseWheelMovesCursor(t *testing.T) {
 	}
 }
 
+func TestBrowseClickSelectsWithoutOpening(t *testing.T) {
+	m := seededModel()
+	m.screen = screenBrowse
+	m.browseCursor = 0
+	second := m.backups[0]
+	second.Folder = "backup-2026-06-25-020000"
+	second.Meta.BackupDate = "2026-06-25-020000"
+	m.backups = append(m.backups, second)
+	_ = m.render()
+
+	var target hitRow
+	for _, row := range m.hits.rows {
+		if row.index == 1 {
+			target = row
+			break
+		}
+	}
+	out, _, _ := m.handleMouse(tea.MouseClickMsg{X: 4, Y: target.y, Button: tea.MouseLeft})
+	got := out.(model)
+	if got.browseCursor != 1 || got.screen != screenBrowse {
+		t.Fatalf("cursor=%d screen=%v, want selected preview without navigation", got.browseCursor, got.screen)
+	}
+}
+
+func TestFooterBackIsClickable(t *testing.T) {
+	m := seededModel()
+	m.screen = screenSettings
+	_ = m.render()
+	var back hitAction
+	for _, action := range m.hits.actions {
+		if action.key == "esc" {
+			back = action
+			break
+		}
+	}
+	if back.key == "" {
+		t.Fatal("footer did not register a clickable esc action")
+	}
+	out, _, _ := m.handleMouse(tea.MouseClickMsg{X: back.x0, Y: back.y, Button: tea.MouseLeft})
+	if got := out.(model).screen; got != screenDashboard {
+		t.Fatalf("screen=%v after clicking Back, want dashboard", got)
+	}
+}
+
+func TestFilterPromptIsClickable(t *testing.T) {
+	m := New(config.Default())
+	m.width, m.height = 100, 40
+	m.screen = screenBackupSelect
+	for _, pt := range catalog.All() {
+		m.cats = append(m.cats, catSel{pt: pt, sel: pt.Verified})
+	}
+	_ = m.render()
+	var filter hitAction
+	for _, action := range m.hits.actions {
+		if action.key == "/" {
+			filter = action
+			break
+		}
+	}
+	if filter.key == "" {
+		t.Fatal("filter prompt did not register a click action")
+	}
+	out, _, _ := m.handleMouse(tea.MouseClickMsg{X: filter.x0, Y: filter.y, Button: tea.MouseLeft})
+	if !out.(model).filterActive {
+		t.Fatal("clicking the filter prompt did not activate filter input")
+	}
+}
+
+func TestAuthFormFieldsAreClickable(t *testing.T) {
+	m := seededModel()
+	m.screen = screenAuthForm
+	m.authFormFields = []formField{{label: "Tenant ID"}, {label: "Client ID"}, {label: "Client secret", masked: true}}
+	_ = m.render()
+	var target hitRow
+	for _, row := range m.hits.rows {
+		if row.index == 2 {
+			target = row
+			break
+		}
+	}
+	out, _, _ := m.handleMouse(tea.MouseClickMsg{X: 4, Y: target.y, Button: tea.MouseLeft})
+	got := out.(model)
+	if got.authFormCursor != 2 || got.screen != screenAuthForm {
+		t.Fatalf("cursor=%d screen=%v, want third field focused", got.authFormCursor, got.screen)
+	}
+}
+
 func TestStaleSyncLoadIgnored(t *testing.T) {
 	m := New(config.Default())
 	m.syncGen = 5

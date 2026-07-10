@@ -16,10 +16,16 @@ type hitRow struct {
 	index int
 }
 
+type hitAction struct {
+	y, x0, x1 int
+	key       string
+}
+
 // uiHits is the set of clickable rows recorded during the last render.
 type uiHits struct {
-	rows   []hitRow
-	action string // key synthesized when a row is clicked
+	rows    []hitRow
+	actions []hitAction
+	action  string // key synthesized when a row is clicked
 }
 
 // recordHit registers the row about to be written to b as clickable for item
@@ -28,11 +34,33 @@ func (m model) recordHit(b *strings.Builder, index int) {
 	m.hits.rows = append(m.hits.rows, hitRow{y: strings.Count(b.String(), "\n"), index: index})
 }
 
+// recordHitAt registers a body-relative row assembled in a nested panel. It is
+// used by responsive two-column views where the clickable list is rendered in
+// a child builder before being joined with a detail panel.
+func (m model) recordHitAt(y, index int) {
+	m.hits.rows = append(m.hits.rows, hitRow{y: y, index: index})
+}
+
+func (m model) recordBodyAction(y, lines, width int, key string) {
+	for line := 0; line < lines; line++ {
+		m.hits.actions = append(m.hits.actions, hitAction{y: y + line, x0: 0, x1: width, key: key})
+	}
+}
+
 // finalizeHits offsets recorded body-relative rows to absolute screen rows and
 // sets the click action for the current screen.
-func (m model) finalizeHits() {
+func (m model) finalizeHits(footerY, xOffset int) {
 	for i := range m.hits.rows {
 		m.hits.rows[i].y += bodyBaseRow
+	}
+	for i := range m.hits.actions {
+		if m.hits.actions[i].y < 0 {
+			m.hits.actions[i].y = footerY
+		} else {
+			m.hits.actions[i].y += bodyBaseRow
+		}
+		m.hits.actions[i].x0 += xOffset
+		m.hits.actions[i].x1 += xOffset
 	}
 	m.hits.action = clickAction(m.screen)
 }
@@ -41,8 +69,10 @@ func (m model) finalizeHits() {
 // the cursor to the clicked item.
 func clickAction(s screen) string {
 	switch s {
-	case screenBackupSelect, screenRestorePick, screenSyncPolicies:
+	case screenBackupSelect, screenRestorePick, screenSyncSelect, screenSyncPolicies:
 		return " " // toggle
+	case screenBrowse, screenAuthForm:
+		return "" // single-click selects and refreshes the preview; enter opens
 	case screenDiffResult, screenPolicyView:
 		return "" // scroll-only screens; click just moves nothing
 	default:
@@ -67,6 +97,12 @@ func (m model) handleMouse(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	case tea.MouseClickMsg:
 		if e.Button != tea.MouseLeft {
 			return m, nil, true
+		}
+		for _, a := range m.hits.actions {
+			if e.Y == a.y && e.X >= a.x0 && e.X < a.x1 {
+				mm, cmd := m.handleKey(a.key)
+				return mm, cmd, true
+			}
 		}
 		for _, r := range m.hits.rows {
 			if r.y == e.Y {
@@ -107,6 +143,8 @@ func (m *model) setListCursor(i int) {
 	switch m.screen {
 	case screenAuth:
 		m.authCursor = i
+	case screenAuthForm:
+		m.authFormCursor = i
 	case screenDashboard:
 		m.dashCursor = i
 	case screenBackupSelect:

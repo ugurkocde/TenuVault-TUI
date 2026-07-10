@@ -265,6 +265,16 @@ func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 		m.showHelp = !m.showHelp
 		return m, nil
 	}
+	if m.showHelp && key == "esc" {
+		m.showHelp = false
+		return m, nil
+	}
+	// q is intentionally a quit key only on the dashboard and first sign-in
+	// screen. Esc is the consistent Back action everywhere else; in text fields
+	// and filters, q remains ordinary input.
+	if key == "q" && m.screen != screenDashboard && m.screen != screenAuth && m.screen != screenAuthForm && !m.filterActive {
+		return m, nil
+	}
 	// Any deliberate keypress clears a transient status message.
 	m.status, m.statusKind = "", ""
 
@@ -714,6 +724,8 @@ func (m model) keySettings(key string) (tea.Model, tea.Cmd) {
 	case " ", "space", "enter":
 		if m.settingsCursor == 0 {
 			m.cfg.IncludeAssignments = !m.cfg.IncludeAssignments
+		} else if m.cfg.RetentionDays < 3650 {
+			m.cfg.RetentionDays++
 		}
 		m.setConfigSaveStatus(config.Save(m.cfg))
 	case "+", "=", "right", "l":

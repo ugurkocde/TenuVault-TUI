@@ -115,15 +115,13 @@ func (m model) viewAuthForm(w int) string {
 	if m.cfg.AuthMethod == config.AuthCertificate {
 		title = "certificate"
 	}
-	b.WriteString(m.th.crumb.Render("Sign in › app registration · "+title) + "\n\n")
+	b.WriteString(m.pageHeading("Sign in / App registration", "Authenticate with a "+title+". Credentials are never written to disk.") + "\n\n")
 	for i, f := range m.authFormFields {
-		marker := "  "
 		lbl := m.th.dim.Render(f.label)
 		if f.optional {
 			lbl = m.th.dim.Render(f.label) + m.th.cardLabel.Render(" (optional)")
 		}
 		if i == m.authFormCursor {
-			marker = m.th.selected.Render("▸ ")
 			lbl = m.th.selected.Render(f.label)
 		}
 		var val string
@@ -138,10 +136,18 @@ func (m model) viewAuthForm(w int) string {
 		if i == m.authFormCursor {
 			val += m.th.accent.Render("█")
 		}
-		b.WriteString(marker + lbl + "\n")
-		b.WriteString("    " + val + "\n")
+		field := lbl + "\n  " + val
+		style := m.th.panel.Width(min(w-2, 76))
+		if i == m.authFormCursor {
+			style = style.BorderForeground(colPurple)
+		}
+		rendered := style.Render(field)
+		start := strings.Count(b.String(), "\n")
+		for line := 0; line <= strings.Count(rendered, "\n"); line++ {
+			m.recordHitAt(start+line, i)
+		}
+		b.WriteString(rendered + "\n")
 	}
-	b.WriteString("\n" + m.th.cardLabel.Render("enter sign in · tab / ↑↓ move · esc back"))
-	b.WriteString("\n" + m.th.cardLabel.Render("the secret is kept in memory only — never written to disk"))
+	b.WriteString("\n" + m.th.success.Render("✔ Secrets are kept in memory only"))
 	return b.String()
 }

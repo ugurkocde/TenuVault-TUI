@@ -1,11 +1,24 @@
-# docs
+# Documentation media
 
-Put the hero screenshot used by the root `README.md` here:
+The root README uses `demo.gif` as its hero and the PNG files as its interface
+gallery. Capture them from a true-color terminal at roughly 112 columns by
+24–26 rows so wide layouts and footer controls remain visible. Crop published
+assets to the terminal content; do not include the operating-system title bar,
+window controls, or outer shadow.
 
-- **File:** `docs/screenshot.png`
-- **Recommended:** PNG, around 1200px wide, captured from a real terminal session
-  (the dashboard makes the best hero shot).
+The build-tagged documentation harness runs the real TUI renderer with
+fictional data:
 
-The root README references it as `<img src="docs/screenshot.png" ...>`. Replace
-this file's sibling `screenshot.png` and it shows up automatically — no README
-edit needed.
+```sh
+go run -tags tui_demo ./cmd/tuidemo -screen dashboard
+go run -tags tui_demo ./cmd/tuidemo -screen browse
+go run -tags tui_demo ./cmd/tuidemo -first-backup
+```
+
+Supported static screen names are `dashboard`, `backup`, `browse`, `compare`,
+`restore`, `sync`, `tenants`, and `settings`. The first-backup mode intercepts
+the start action and simulates progress in-process, so documentation capture
+cannot write to Microsoft Graph.
+
+Keep tenant names and content fictional, use the same terminal dimensions for
+the full set, and visually inspect every regenerated asset before publishing.
