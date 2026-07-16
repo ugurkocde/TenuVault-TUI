@@ -66,7 +66,9 @@ and progress states are the ones in the shipped application.
 
 ## Install and update
 
-### Windows — PowerShell Gallery (recommended)
+### Windows
+
+#### PowerShell Gallery (recommended)
 
 ```powershell
 Install-Module TenuVault-TUI -Scope CurrentUser
@@ -90,6 +92,22 @@ manually downloaded ZIP. The module requires 64-bit Windows, works in Windows
 PowerShell 5.1 and PowerShell 7+, and runs on Windows ARM64 through x64
 emulation. Use Windows Terminal, `pwsh`, or a console window for the TUI; the
 PowerShell ISE supports headless commands only.
+
+#### WinGet
+
+TenuVault is also available from the
+[Windows Package Manager catalog](https://github.com/microsoft/winget-pkgs/tree/master/manifests/u/UgurLabs/TenuVault)
+for x64 and ARM64 devices:
+
+```powershell
+winget install TenuVault
+tenuvault
+
+# Later, update a WinGet installation:
+winget upgrade --id UgurLabs.TenuVault --exact
+```
+
+#### Terminal requirements
 
 For the full two-column dashboard, use a terminal of at least 88 columns and
 24 rows. TenuVault also provides a compact layout down to 46 columns by 20
