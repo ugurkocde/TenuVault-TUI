@@ -3,7 +3,9 @@
 // so policies restore cleanly, fetches per-item detail and nested sub-resources
 // where required (script content, settings catalog settings, admin-template
 // definition values, etc.), and writes a metadata.json manifest plus a
-// backup.log that records the outcome of every category.
+// backup.log that records the outcome of every category. Settings catalog
+// files are shaped like the portal's own "Export JSON" so they can also be fed
+// through the portal's native Import policy feature.
 package backup
 
 import (
@@ -172,7 +174,7 @@ loop:
 						cr.Warnings++
 						emit(Event{Category: pt.Category, Friendly: pt.Friendly, Err: fmt.Errorf("incomplete detail"), Current: done, Total: total})
 					}
-					relName, sum, err := writePolicy(catDir, name, full)
+					relName, sum, err := writePolicy(catDir, name, full, pt)
 					if err != nil {
 						// A failed disk write is data loss for this policy; record the
 						// cause so the log can distinguish it from partial Graph detail.
@@ -278,13 +280,33 @@ loop:
 
 var noiseKeys = map[string]bool{"@odata.context": true}
 
+// settingsCatalogContext is the entity context the Intune portal's own
+// "Export JSON" stamps on settings catalog policies. Carrying it makes the
+// backup file accepted by Devices > Configuration > Create > Import policy.
+const settingsCatalogContext = "https://graph.microsoft.com/beta/$metadata#deviceManagement/configurationPolicies/$entity"
+
+// portalizeSettingsCatalog shapes a settings catalog policy like the portal's
+// export: no stray annotations (the $expand fetch leaves settings@odata.context
+// behind), and the entity @odata.context present.
+func portalizeSettingsCatalog(v any) any {
+	m, ok := jsonutil.StripKeysFunc(v, jsonutil.IsODataAnnotation).(map[string]any)
+	if !ok {
+		return v
+	}
+	m["@odata.context"] = settingsCatalogContext
+	return m
+}
+
 // writePolicy writes one policy and returns the file name it ended up under
 // (uniquePath may have added a " (2)" suffix) plus the sha256 of the exact
 // bytes written, for the integrity sidecar.
-func writePolicy(dir, name string, raw json.RawMessage) (string, string, error) {
+func writePolicy(dir, name string, raw json.RawMessage, pt catalog.PolicyType) (string, string, error) {
 	cleaned, err := jsonutil.Normalize(raw, noiseKeys)
 	if err != nil {
 		cleaned = raw
+	}
+	if pt.Key == "configurationPolicies" {
+		cleaned = portalizeSettingsCatalog(cleaned)
 	}
 	data, err := json.MarshalIndent(cleaned, "", "  ")
 	if err != nil {

@@ -405,3 +405,49 @@ func TestBackupDegradesWithoutGroupScope(t *testing.T) {
 		t.Error("raw group id lost from the policy file")
 	}
 }
+
+// TestSettingsCatalogFilesArePortalImportable pins the file shape the Intune
+// portal's Create > Import policy accepts: the entity @odata.context present,
+// no stray expand annotations, and settings kept as {id, settingInstance}.
+func TestSettingsCatalogFilesArePortalImportable(t *testing.T) {
+	sc, _ := catalog.ByKey("configurationPolicies")
+	f := &graphtest.Fake{
+		Lists: map[string][]json.RawMessage{
+			"beta " + sc.ListPath: {[]byte(`{"id":"p1","name":"Baseline"}`)},
+		},
+		Gets: map[string]json.RawMessage{
+			"beta " + sc.ListPath + "/p1": []byte(`{
+				"@odata.context":"https://graph.microsoft.com/beta/$metadata#deviceManagement/configurationPolicies(settings())/$entity",
+				"id":"p1","name":"Baseline","platforms":"windows10","technologies":"mdm","settingCount":1,
+				"settings@odata.context":"https://graph.microsoft.com/beta/$metadata#...settings",
+				"settings":[{"id":"0","settingInstance":{"@odata.type":"#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance","settingDefinitionId":"d1"}}]}`),
+		},
+	}
+	res, err := Run(context.Background(), f, []catalog.PolicyType{sc},
+		Options{Root: t.TempDir(), Tenant: graph.Tenant{ID: "t1", DisplayName: "Lab"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(res.Path, "ConfigurationPolicies", "Baseline.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["@odata.context"] != "https://graph.microsoft.com/beta/$metadata#deviceManagement/configurationPolicies/$entity" {
+		t.Errorf("@odata.context = %v, want the portal entity context", m["@odata.context"])
+	}
+	if _, ok := m["settings@odata.context"]; ok {
+		t.Error("settings@odata.context must be stripped for portal import")
+	}
+	setting := m["settings"].([]any)[0].(map[string]any)
+	if setting["id"] != "0" {
+		t.Errorf("settings[0].id = %v, want kept as in the portal export", setting["id"])
+	}
+	inst := setting["settingInstance"].(map[string]any)
+	if inst["@odata.type"] != "#microsoft.graph.deviceManagementConfigurationChoiceSettingInstance" {
+		t.Error("settingInstance @odata.type must be preserved")
+	}
+}
