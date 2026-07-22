@@ -88,7 +88,7 @@ func Run(ctx context.Context, target, source graph.API, items []Item, namePrefix
 					res.Err = err
 				} else {
 					res.Warn = warn
-					res.NewID, res.Err = policyops.Create(ctx, target, it.Category, raw, namePrefix)
+					res.NewID, res.Err = policyops.Create(ctx, target, it.Category, stripTenantRefs(raw), namePrefix)
 				}
 				mu.Lock()
 				results[i] = res
@@ -120,6 +120,23 @@ feed:
 		}
 	}
 	return results
+}
+
+// stripTenantRefs removes tenant-local references that carry no meaning in a
+// different tenant. Scope tag IDs index the source tenant's RBAC scope tags;
+// copied verbatim they would bind the new policy to an unrelated (or missing)
+// tag in the target, so the target's default scope applies instead. Restore
+// runs in the same tenant and keeps them; this is sync-only on purpose.
+func stripTenantRefs(raw json.RawMessage) json.RawMessage {
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return raw
+	}
+	delete(m, "roleScopeTagIds")
+	if out, err := json.Marshal(m); err == nil {
+		return out
+	}
+	return raw
 }
 
 // resolve returns the full policy JSON for an item from its source. The bool is

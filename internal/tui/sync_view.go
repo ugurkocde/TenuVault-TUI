@@ -242,7 +242,7 @@ func (m model) viewSyncConfirm(w int) string {
 		b.WriteString("  " + m.th.dim.Render(fmt.Sprintf("… and %d more", len(m.syncItems)-limit)) + "\n")
 	}
 	b.WriteString("\n" + m.th.warn.Render(truncWidth("⚠ Never overwrites — only creates new policies; existing policies are untouched", w)) + "\n")
-	b.WriteString(m.th.dim.Render(truncWidth("Conditional access is created disabled · assignments are not copied", w)) + "\n\n")
+	b.WriteString(m.th.dim.Render(truncWidth("Conditional access is created disabled · assignments and scope tags are not copied", w)) + "\n\n")
 	if m.syncRunning {
 		b.WriteString(m.th.inProg.Render(fmt.Sprintf("%s creating… %d/%d", spinnerFrames[m.frame%len(spinnerFrames)], m.syncCur, m.syncTot)) +
 			"  " + m.th.cardLabel.Render("x cancel"))

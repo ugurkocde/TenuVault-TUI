@@ -235,7 +235,7 @@ func buildSyncTypes() []syncType {
 func (m model) keySyncSelect(key string) (tea.Model, tea.Cmd) {
 	if len(m.syncTypes) == 0 {
 		if key == "esc" || key == "q" {
-			m.goTo(screenDashboard)
+			m.goTo(screenSyncSource)
 		}
 		return m, nil
 	}
@@ -281,7 +281,7 @@ func (m model) keySyncSelect(key string) (tea.Model, tea.Cmd) {
 		m.syncTargetCursor = 0
 		m.goTo(screenSyncTarget)
 	case "esc", "q":
-		m.goTo(screenDashboard)
+		m.goTo(screenSyncSource)
 	}
 	return m, nil
 }
@@ -417,7 +417,13 @@ func (m model) keySyncTarget(key string) (tea.Model, tea.Cmd) {
 		m.syncNameCursor = 0
 		m.goTo(screenSyncNaming)
 	case "esc", "q":
-		m.goTo(screenDashboard)
+		// Step back one screen, matching the "esc back" hint: to the backup item
+		// picker for a backup source, or the category list for a live source.
+		if m.syncFromBackup {
+			m.goTo(screenRestorePick)
+		} else {
+			m.goTo(screenSyncSelect)
+		}
 	}
 	return m, nil
 }

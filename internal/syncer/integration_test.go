@@ -13,6 +13,7 @@ import (
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/graph"
 	"github.com/ugurkocde/TenuVault-TUI/internal/graphtest"
+	"github.com/ugurkocde/TenuVault-TUI/internal/policyops"
 )
 
 // TestRunSyncLive copies a live source policy into the target, asserting the
@@ -50,6 +51,34 @@ func TestRunSyncLive(t *testing.T) {
 	}
 	if body["@odata.type"] != "#microsoft.graph.windows10GeneralConfiguration" {
 		t.Error("@odata.type must be preserved for create routing")
+	}
+}
+
+// TestRunSyncStripsScopeTags: scope tag IDs are tenant-local RBAC references,
+// so sync must drop them; restore (same tenant, via policyops.Create directly)
+// keeps them.
+func TestRunSyncStripsScopeTags(t *testing.T) {
+	raw := []byte(`{"@odata.type":"#microsoft.graph.windows10GeneralConfiguration","id":"src-1","displayName":"BitLocker","roleScopeTagIds":["7","12"]}`)
+	target := &graphtest.Fake{}
+	results := Run(context.Background(), target, &graphtest.Fake{},
+		[]Item{{Category: "DeviceConfigurations", TypeKey: "deviceConfigurations", Name: "BitLocker", Raw: raw}}, "", nil)
+	if len(results) != 1 || results[0].Err != nil {
+		t.Fatalf("results = %+v", results)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(target.Posts[0].Body, &body)
+	if _, ok := body["roleScopeTagIds"]; ok {
+		t.Error("roleScopeTagIds must be stripped on cross-tenant sync")
+	}
+
+	restoreTarget := &graphtest.Fake{}
+	if _, err := policyops.Create(context.Background(), restoreTarget, "DeviceConfigurations", raw, ""); err != nil {
+		t.Fatalf("restore-path create: %v", err)
+	}
+	body = map[string]any{}
+	_ = json.Unmarshal(restoreTarget.Posts[0].Body, &body)
+	if _, ok := body["roleScopeTagIds"]; !ok {
+		t.Error("roleScopeTagIds must be kept on same-tenant restore")
 	}
 }
 

@@ -74,6 +74,38 @@ func TestBackupSyncBlocksSameTenantWithoutPrefix(t *testing.T) {
 	}
 }
 
+// TestSyncEscStepsBackOneScreen pins the wizard's esc semantics: every mid-flow
+// step goes back exactly one screen (matching the "esc back" hint), never
+// straight to the dashboard with all selections discarded.
+func TestSyncEscStepsBackOneScreen(t *testing.T) {
+	m := New(testConfig(t))
+	m.connected = true
+	m.conns = []connection.Connection{
+		{Tenant: graph.Tenant{ID: "tenant-1"}},
+		{Tenant: graph.Tenant{ID: "tenant-2"}},
+	}
+	m.syncTypes = buildSyncTypes()
+
+	m.screen = screenSyncSelect
+	next, _ := m.keySyncSelect("esc")
+	if got := next.(model); got.screen != screenSyncSource {
+		t.Fatalf("categories esc: screen=%v, want sync source", got.screen)
+	}
+
+	m.screen = screenSyncTarget
+	m.syncFromBackup = false
+	next, _ = m.keySyncTarget("esc")
+	if got := next.(model); got.screen != screenSyncSelect {
+		t.Fatalf("target esc (live): screen=%v, want categories", got.screen)
+	}
+
+	m.syncFromBackup = true
+	next, _ = m.keySyncTarget("esc")
+	if got := next.(model); got.screen != screenRestorePick {
+		t.Fatalf("target esc (backup): screen=%v, want backup item picker", got.screen)
+	}
+}
+
 func TestCompletedBackgroundDiffDoesNotHijackNavigation(t *testing.T) {
 	m := New(testConfig(t))
 	m.screen = screenDashboard
