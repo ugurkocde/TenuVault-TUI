@@ -507,8 +507,9 @@ func (m model) viewPolicyView(w int) string {
 	if end > len(m.policyLines) {
 		end = len(m.policyLines)
 	}
+	lineW := w - 2
 	for i := start; i < end; i++ {
-		b.WriteString(m.th.dim.Render(truncWidth(m.policyLines[i], w-2)) + "\n")
+		b.WriteString(m.renderJSONLine(m.policyLines[i], lineW) + "\n")
 	}
 	b.WriteString("\n" + m.th.cardLabel.Render(fmt.Sprintf("lines %d–%d of %d", start+1, end, len(m.policyLines))))
 	return b.String()
@@ -543,6 +544,24 @@ func (m model) viewSettings(w int) string {
 	}
 	b.WriteString(m.th.panel.Width(min(w-2, 88)).Render(panel.String()))
 	return b.String()
+}
+
+// renderJSONLine renders one line of captured policy JSON into a fixed-width
+// cell. Uniform width matters: the outer layout centers every line, so ragged
+// lines would each be re-centered individually and the indentation lost.
+// Object keys get the accent tint to keep the structure scannable.
+func (m model) renderJSONLine(line string, w int) string {
+	line = truncWidth(line, w)
+	styled := m.th.dim.Render(line)
+	if q := strings.Index(line, `":`); q > 0 {
+		if o := strings.Index(line, `"`); o >= 0 && o < q {
+			styled = m.th.dim.Render(line[:o]) + m.th.accent.Render(line[o:q+1]) + m.th.normal.Render(line[q+1:])
+		}
+	}
+	if pad := w - lipgloss.Width(styled); pad > 0 {
+		styled += strings.Repeat(" ", pad)
+	}
+	return styled
 }
 
 func onOff(b bool) string {

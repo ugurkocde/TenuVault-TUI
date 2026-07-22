@@ -240,3 +240,31 @@ func TestRenderBrowseLoading(t *testing.T) {
 		t.Error("loaded browse screen missing the backup row")
 	}
 }
+
+// TestPolicyViewLinesUniformWidth: the outer layout centers every line, so the
+// JSON viewer must emit fixed-width cells or indentation is lost to per-line
+// re-centering.
+func TestPolicyViewLinesUniformWidth(t *testing.T) {
+	m := seededModel()
+	m.screen = screenPolicyView
+	m.catName = "ConfigurationPolicies"
+	m.policyLines = []string{
+		"{",
+		`  "name": "7Zip - Support Approved",`,
+		`  "settingCount": 1,`,
+		"}",
+	}
+
+	out := m.viewPolicyView(88)
+	lines := strings.Split(out, "\n")
+	widths := map[int]bool{}
+	for _, l := range lines[3:7] { // the four JSON rows after heading + blank line
+		widths[lipgloss.Width(l)] = true
+	}
+	if len(widths) != 1 {
+		t.Fatalf("JSON rows have mixed widths %v, want one fixed width", widths)
+	}
+	if !strings.Contains(out, "7Zip - Support Approved") {
+		t.Fatal("policy content missing from output")
+	}
+}
