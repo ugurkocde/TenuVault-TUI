@@ -185,7 +185,10 @@ type model struct {
 	policyScroll int
 
 	// settings
-	settingsCursor int
+	settingsCursor  int
+	settingsPicking bool   // native folder picker dialog is open
+	settingsEditing bool   // fallback inline text-edit mode for the backup location
+	settingsInput   string // in-progress text while editing
 
 	// diff
 	diffA       *store.Backup

@@ -2,11 +2,15 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/ncruces/zenity"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/backup"
 	"github.com/ugurkocde/TenuVault-TUI/internal/catalog"
@@ -89,6 +93,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.backups) > 0 {
 			b := m.backups[0]
 			m.lastBackup = &b
+		} else {
+			m.lastBackup = nil
+		}
+		return m, nil
+
+	case dirPickedMsg:
+		m.settingsPicking = false
+		switch {
+		case errors.Is(msg.err, zenity.ErrCanceled):
+			if m.screen == screenSettings {
+				m.status, m.statusKind = "", ""
+			}
+		case msg.err != nil:
+			// No GUI available (SSH, headless, missing zenity binary): fall back
+			// to typing the path inline. Only if Settings is still showing, so a
+			// stale result can't hijack another screen's key handling.
+			if m.screen == screenSettings {
+				m.settingsEditing = true
+				m.settingsInput = m.cfg.BackupRoot
+				m.status, m.statusKind = "Folder picker unavailable · type the path instead", "warn"
+			}
+		default:
+			return m.commitBackupRoot(msg.path)
 		}
 		return m, nil
 
@@ -259,9 +286,9 @@ func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 		m.cancel()
 		return m, tea.Quit
 	}
-	// "?" toggles help everywhere except text entry: the auth form and an
-	// active "/" filter, where it is a perfectly valid character.
-	if key == "?" && m.screen != screenAuthForm && !m.filterActive {
+	// "?" toggles help everywhere except text entry: the auth form, an active
+	// "/" filter, and the backup-location editor, where it is a valid character.
+	if key == "?" && m.screen != screenAuthForm && !m.filterActive && !m.settingsEditing {
 		m.showHelp = !m.showHelp
 		return m, nil
 	}
@@ -272,7 +299,7 @@ func (m model) handleKey(key string) (tea.Model, tea.Cmd) {
 	// q is intentionally a quit key only on the dashboard and first sign-in
 	// screen. Esc is the consistent Back action everywhere else; in text fields
 	// and filters, q remains ordinary input.
-	if key == "q" && m.screen != screenDashboard && m.screen != screenAuth && m.screen != screenAuthForm && !m.filterActive {
+	if key == "q" && m.screen != screenDashboard && m.screen != screenAuth && m.screen != screenAuthForm && !m.filterActive && !m.settingsEditing {
 		return m, nil
 	}
 	// Any deliberate keypress clears a transient status message.
@@ -711,7 +738,29 @@ func (m model) keyPolicyView(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) keySettings(key string) (tea.Model, tea.Cmd) {
-	const items = 2 // include assignments, retention days
+	const items = 3 // include assignments, retention days, backup location
+	if m.settingsEditing {
+		switch key {
+		case "esc":
+			m.settingsEditing = false // cancel, keep the old value
+		case "enter":
+			return m.commitBackupRoot(m.settingsInput)
+		case "backspace":
+			if r := []rune(m.settingsInput); len(r) > 0 {
+				m.settingsInput = string(r[:len(r)-1])
+			}
+		case " ", "space":
+			m.settingsInput += " "
+		default:
+			if r := []rune(key); len(r) == 1 && !unicode.IsControl(r[0]) {
+				m.settingsInput += key
+			}
+		}
+		return m, nil
+	}
+	if m.settingsPicking && (key == "esc" || key == "q") {
+		return m, nil // stay put until the open folder dialog resolves
+	}
 	switch key {
 	case "up", "k":
 		if m.settingsCursor > 0 {
@@ -722,6 +771,14 @@ func (m model) keySettings(key string) (tea.Model, tea.Cmd) {
 			m.settingsCursor++
 		}
 	case " ", "space", "enter":
+		if m.settingsCursor == 2 {
+			if m.settingsPicking {
+				return m, nil // dialog already open
+			}
+			m.settingsPicking = true
+			m.status, m.statusKind = "Waiting for folder picker…", ""
+			return m, pickBackupDir(m.cfg.BackupRoot)
+		}
 		if m.settingsCursor == 0 {
 			m.cfg.IncludeAssignments = !m.cfg.IncludeAssignments
 		} else if m.cfg.RetentionDays < 3650 {
@@ -742,6 +799,33 @@ func (m model) keySettings(key string) (tea.Model, tea.Cmd) {
 		m.goTo(screenDashboard)
 	}
 	return m, nil
+}
+
+// commitBackupRoot validates and persists a new backup location, then reloads
+// the snapshot list from it.
+func (m model) commitBackupRoot(path string) (tea.Model, tea.Cmd) {
+	root := config.ExpandPath(path)
+	if root == "" {
+		root = config.Default().BackupRoot
+	}
+	if !filepath.IsAbs(root) {
+		if abs, err := filepath.Abs(root); err == nil {
+			root = abs // the stored root must not depend on a future working dir
+		}
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		// Keep the inline editor open (if active) so the path can be fixed.
+		m.status, m.statusKind = "Cannot use that location: "+err.Error(), "err"
+		return m, nil
+	}
+	m.settingsEditing = false
+	if root == m.cfg.BackupRoot {
+		m.status, m.statusKind = "", ""
+		return m, nil
+	}
+	m.cfg.BackupRoot = root
+	m.setConfigSaveStatus(config.Save(m.cfg))
+	return m, loadBackups(m.cfg.BackupRoot)
 }
 
 func (m *model) setConfigSaveStatus(err error) {

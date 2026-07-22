@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/fileutil"
 )
@@ -118,7 +119,7 @@ func Load() Config {
 	if c.ClientID == "" {
 		c.ClientID = WellKnownClientID
 	}
-	if c.BackupRoot == "" {
+	if c.BackupRoot = ExpandPath(c.BackupRoot); c.BackupRoot == "" {
 		c.BackupRoot = defaultBackupRoot()
 	}
 	return c
@@ -135,6 +136,22 @@ func Save(c Config) error {
 		return err
 	}
 	return fileutil.WriteFileAtomic(Path(), data, 0o600)
+}
+
+// ExpandPath normalizes a user-supplied path: trims whitespace, expands a
+// leading "~" to the home directory, and cleans the result. Empty input stays
+// empty so callers can apply their own default.
+func ExpandPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
+		if home, err := os.UserHomeDir(); err == nil {
+			p = filepath.Join(home, p[1:])
+		}
+	}
+	if p == "" {
+		return ""
+	}
+	return filepath.Clean(p)
 }
 
 func defaultBackupRoot() string {

@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/ncruces/zenity"
 
 	"github.com/ugurkocde/TenuVault-TUI/internal/auth"
 	"github.com/ugurkocde/TenuVault-TUI/internal/backup"
@@ -115,6 +116,21 @@ func runRestore(runCtx, ui context.Context, c *graph.Client, items []restore.Ite
 			send(ui, ch, restoreDoneMsg{results: results})
 		}()
 		return nil
+	}
+}
+
+// dirPickedMsg carries the result of the native folder picker dialog.
+type dirPickedMsg struct {
+	path string
+	err  error
+}
+
+// pickBackupDir opens the OS folder picker (Explorer on Windows, Finder dialog
+// on macOS). The dialog blocks, so it runs as an async command.
+func pickBackupDir(current string) tea.Cmd {
+	return func() tea.Msg {
+		dir, err := zenity.SelectFile(zenity.Directory(), zenity.Filename(current), zenity.Title("Select backup location"))
+		return dirPickedMsg{path: dir, err: err}
 	}
 }
 

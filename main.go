@@ -59,7 +59,7 @@ func main() {
 		cfg.TenantID = tenant
 	}
 	if backupRoot != "" {
-		cfg.BackupRoot = backupRoot
+		cfg.BackupRoot = config.ExpandPath(backupRoot)
 	}
 
 	if _, err := tui.Program(cfg).Run(); err != nil {

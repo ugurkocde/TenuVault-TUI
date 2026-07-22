@@ -66,7 +66,7 @@ func (m model) render() string {
 	case screenPolicyView:
 		body, hints = m.viewPolicyView(w), "↑/↓ scroll · esc back"
 	case screenSettings:
-		body, hints = m.viewSettings(w), "↑/↓ move · space toggle · ←/→ adjust · esc back"
+		body, hints = m.viewSettings(w), "↑/↓ move · enter select · ←/→ adjust · esc back"
 	case screenConnections:
 		body, hints = m.viewConnections(w), "↑/↓ move · enter use · a add · x remove · esc back"
 		if m.connRemove >= 0 {
@@ -101,11 +101,14 @@ func (m model) render() string {
 	if m.filterActive {
 		hints = "type to filter · backspace delete · enter keep · esc clear"
 	}
+	if m.screen == screenSettings && m.settingsEditing {
+		hints = "type path · enter save · esc cancel"
+	}
 	if m.showHelp {
 		*m.hits = uiHits{}
 		body = m.helpView(w, hints)
 		hints = "? close help · esc back · ctrl+c force quit"
-	} else if !m.filterActive && m.screen != screenAuthForm {
+	} else if !m.filterActive && !m.settingsEditing && m.screen != screenAuthForm {
 		hints += " · ? help"
 	}
 
@@ -516,25 +519,29 @@ func (m model) viewSettings(w int) string {
 	b.WriteString(m.pageHeading("Dashboard / Settings", "Configure backup behavior and local storage.") + "\n\n")
 	var panel strings.Builder
 	panel.WriteString(m.sectionLabel("Backups") + "\n")
+	locVal := compactPath(m.cfg.BackupRoot)
+	switch {
+	case m.settingsPicking:
+		locVal = "Choosing folder…"
+	case m.settingsEditing:
+		locVal = m.settingsInput + "▌"
+	}
 	settings := []struct {
 		label, value string
 	}{
 		{"Include assignments in backups", onOff(m.cfg.IncludeAssignments)},
 		{"Retention (days, 0 = keep all)", fmt.Sprintf("%d", m.cfg.RetentionDays)},
+		{"Backup location", locVal},
 	}
 	for i, r := range settings {
 		m.recordHitAt(strings.Count(b.String(), "\n")+1+strings.Count(panel.String(), "\n"), i)
 		panel.WriteString(m.actionRow(r.label, r.value, min(w-4, 84), i == m.settingsCursor) + "\n")
 	}
 	if !m.isShort() {
-		panel.WriteString("\n" + m.th.cardLabel.Render("Backup location  ") + m.th.accent.Render(compactPath(m.cfg.BackupRoot)))
-		panel.WriteString("\n" + m.th.cardLabel.Render("Config           ") + m.th.dim.Render(compactPath(config.Path())))
+		panel.WriteString("\n" + m.th.cardLabel.Render("Config  ") + m.th.dim.Render(compactPath(config.Path())))
 		panel.WriteString("\n\n" + m.th.success.Render("✔ Settings are saved automatically"))
 	}
 	b.WriteString(m.th.panel.Width(min(w-2, 88)).Render(panel.String()))
-	if m.isShort() {
-		b.WriteString("\n" + m.th.cardLabel.Render("Backups  ") + m.th.accent.Render(truncWidth(compactPath(m.cfg.BackupRoot), w-10)))
-	}
 	return b.String()
 }
 

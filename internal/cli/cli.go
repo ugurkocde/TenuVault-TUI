@@ -58,7 +58,7 @@ func Backup(args []string) int {
 	cfg := config.Load()
 	root := cfg.BackupRoot
 	if *out != "" {
-		root = *out
+		root = config.ExpandPath(*out)
 	}
 	types, err := selectedTypes(*categories)
 	if err != nil {
