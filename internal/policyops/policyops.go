@@ -147,6 +147,54 @@ func cleanForCreate(raw json.RawMessage, namePrefix string, caDisable bool) map[
 	return m
 }
 
+// ensureComplianceBlockAction guarantees the scheduled block action Graph
+// requires on compliance policy creates ("Compliance policy must have one and
+// only one block scheduled action"). Backups taken before
+// scheduledActionConfigurations were captured hold rules without actions;
+// they get the portal default (block immediately) so they stay restorable.
+func ensureComplianceBlockAction(m map[string]any) {
+	rules, _ := m["scheduledActionsForRule"].([]any)
+	for _, rAny := range rules {
+		r, ok := rAny.(map[string]any)
+		if !ok {
+			continue
+		}
+		cfgs, _ := r["scheduledActionConfigurations"].([]any)
+		for _, cAny := range cfgs {
+			if c, ok := cAny.(map[string]any); ok && c["actionType"] == "block" {
+				return
+			}
+		}
+	}
+	block := map[string]any{
+		"actionType":                "block",
+		"gracePeriodHours":          0,
+		"notificationTemplateId":    "00000000-0000-0000-0000-000000000000",
+		"notificationMessageCCList": []any{},
+	}
+	if len(rules) > 0 {
+		if r, ok := rules[0].(map[string]any); ok {
+			cfgs, _ := r["scheduledActionConfigurations"].([]any)
+			r["scheduledActionConfigurations"] = append(cfgs, block)
+			return
+		}
+	}
+	m["scheduledActionsForRule"] = []any{map[string]any{
+		"ruleName":                      nil,
+		"scheduledActionConfigurations": []any{block},
+	}}
+}
+
+// prepareBody cleans a simple policy for create and applies per-category
+// fixups that Graph demands on POST.
+func prepareBody(pt catalog.PolicyType, raw json.RawMessage, namePrefix string) (json.RawMessage, error) {
+	m := cleanForCreate(raw, namePrefix, pt.Category == "ConditionalAccessPolicies")
+	if pt.Category == "CompliancePolicies" {
+		ensureComplianceBlockAction(m)
+	}
+	return json.Marshal(m)
+}
+
 // PrepareCreate cleans a simple policy and resolves its create endpoint. A
 // non-empty namePrefix is prepended to the display name (empty keeps it).
 func PrepareCreate(category string, raw json.RawMessage, namePrefix string) (version, endpoint string, body json.RawMessage, err error) {
@@ -154,7 +202,7 @@ func PrepareCreate(category string, raw json.RawMessage, namePrefix string) (ver
 	if err != nil {
 		return "", "", nil, err
 	}
-	out, err := json.Marshal(cleanForCreate(raw, namePrefix, category == "ConditionalAccessPolicies"))
+	out, err := prepareBody(pt, raw, namePrefix)
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -175,7 +223,7 @@ func Create(ctx context.Context, c graph.API, category string, raw json.RawMessa
 	case "intent":
 		return createIntent(ctx, c, pt, raw, namePrefix)
 	default:
-		body, err := json.Marshal(cleanForCreate(raw, namePrefix, pt.Category == "ConditionalAccessPolicies"))
+		body, err := prepareBody(pt, raw, namePrefix)
 		if err != nil {
 			return "", err
 		}

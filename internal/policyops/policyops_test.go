@@ -131,3 +131,60 @@ func TestCreateIntentRequiresTemplate(t *testing.T) {
 		t.Error("expected error when templateId is missing")
 	}
 }
+
+// Graph rejects compliance policy creates whose rules carry no block action
+// ("must have one and only one block scheduled action"). Old backups captured
+// scheduledActionsForRule without the nested scheduledActionConfigurations, so
+// creates must inject the portal-default block action for them.
+func TestPrepareCreateComplianceInjectsDefaultBlockAction(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{"rule without configurations", `{"@odata.type":"#microsoft.graph.windows10CompliancePolicy","displayName":"C","scheduledActionsForRule":[{"ruleName":null}]}`},
+		{"no rules at all", `{"@odata.type":"#microsoft.graph.windows10CompliancePolicy","displayName":"C"}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, _, body, err := PrepareCreate("CompliancePolicies", []byte(c.raw), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var m map[string]any
+			if err := json.Unmarshal(body, &m); err != nil {
+				t.Fatal(err)
+			}
+			rules, _ := m["scheduledActionsForRule"].([]any)
+			if len(rules) != 1 {
+				t.Fatalf("rules = %v, want exactly one", rules)
+			}
+			cfgs, _ := rules[0].(map[string]any)["scheduledActionConfigurations"].([]any)
+			if len(cfgs) != 1 || cfgs[0].(map[string]any)["actionType"] != "block" {
+				t.Fatalf("configurations = %v, want one default block action", cfgs)
+			}
+		})
+	}
+}
+
+func TestPrepareCreateComplianceKeepsExistingBlockAction(t *testing.T) {
+	raw := []byte(`{"@odata.type":"#microsoft.graph.windows10CompliancePolicy","displayName":"C",
+		"scheduledActionsForRule":[{"ruleName":null,"scheduledActionConfigurations":[
+			{"actionType":"block","gracePeriodHours":12,"notificationTemplateId":"11111111-1111-1111-1111-111111111111"}]}]}`)
+	_, _, body, err := PrepareCreate("CompliancePolicies", raw, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		t.Fatal(err)
+	}
+	rules := m["scheduledActionsForRule"].([]any)
+	cfgs := rules[0].(map[string]any)["scheduledActionConfigurations"].([]any)
+	if len(cfgs) != 1 {
+		t.Fatalf("configurations = %v, want the captured action only", cfgs)
+	}
+	got := cfgs[0].(map[string]any)
+	if got["gracePeriodHours"] != float64(12) {
+		t.Errorf("gracePeriodHours = %v, want the captured 12", got["gracePeriodHours"])
+	}
+}

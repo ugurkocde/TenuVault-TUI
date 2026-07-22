@@ -133,6 +133,30 @@ func stripTenantRefs(raw json.RawMessage) json.RawMessage {
 		return raw
 	}
 	delete(m, "roleScopeTagIds")
+	// Compliance notification templates are tenant-local too: point copied
+	// scheduled actions at the zero GUID (no template) instead of a foreign
+	// template id, and drop the CC list of source-tenant groups.
+	if rules, ok := m["scheduledActionsForRule"].([]any); ok {
+		for _, rAny := range rules {
+			r, ok := rAny.(map[string]any)
+			if !ok {
+				continue
+			}
+			cfgs, _ := r["scheduledActionConfigurations"].([]any)
+			for _, cAny := range cfgs {
+				c, ok := cAny.(map[string]any)
+				if !ok {
+					continue
+				}
+				if _, has := c["notificationTemplateId"]; has {
+					c["notificationTemplateId"] = "00000000-0000-0000-0000-000000000000"
+				}
+				if _, has := c["notificationMessageCCList"]; has {
+					c["notificationMessageCCList"] = []any{}
+				}
+			}
+		}
+	}
 	if out, err := json.Marshal(m); err == nil {
 		return out
 	}

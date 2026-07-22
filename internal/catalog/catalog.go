@@ -62,7 +62,11 @@ func All() []PolicyType {
 			ListPath: "/deviceManagement/groupPolicyConfigurations", NameField: "displayName",
 			CreateMode: "groupPolicy", RestoreSupported: true, Verified: true},
 		{Key: "compliancePolicies", Friendly: "Compliance policies", Category: "CompliancePolicies", Group: "Configuration", Version: "beta",
-			ListPath: "/deviceManagement/deviceCompliancePolicies", NameField: "displayName", DetailByID: true, Expand: "scheduledActionsForRule", RestoreSupported: true, Verified: true},
+			ListPath: "/deviceManagement/deviceCompliancePolicies", NameField: "displayName", DetailByID: true,
+			// The nested expand is required: a plain scheduledActionsForRule
+			// expand returns rules without their scheduledActionConfigurations,
+			// and Graph rejects a create whose rules carry no block action.
+			Expand: "scheduledActionsForRule($expand=scheduledActionConfigurations)", RestoreSupported: true, Verified: true},
 		{Key: "intents", Friendly: "Endpoint security / baselines", Category: "EndpointSecurityIntents", Group: "Configuration", Version: "beta",
 			ListPath: "/deviceManagement/intents", NameField: "displayName",
 			Sub:        &SubResource{Suffix: "settings", EmbedKey: "settings"},

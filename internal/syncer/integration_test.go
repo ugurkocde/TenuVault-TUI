@@ -82,6 +82,38 @@ func TestRunSyncStripsScopeTags(t *testing.T) {
 	}
 }
 
+// TestRunSyncNeutralizesNotificationTemplates: compliance notification template
+// ids reference the source tenant's templates; sync points the copy at the zero
+// GUID and clears the CC list, keeping the action schedule itself.
+func TestRunSyncNeutralizesNotificationTemplates(t *testing.T) {
+	raw := []byte(`{"@odata.type":"#microsoft.graph.windows10CompliancePolicy","id":"src-1","displayName":"C",
+		"scheduledActionsForRule":[{"id":"r1","ruleName":null,"scheduledActionConfigurations":[
+			{"id":"c1","actionType":"block","gracePeriodHours":0,"notificationTemplateId":"11111111-1111-1111-1111-111111111111","notificationMessageCCList":["g1"]}]}]}`)
+	dir := t.TempDir()
+	path := dir + "/c.json"
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := &graphtest.Fake{}
+	results := Run(context.Background(), target, nil,
+		[]Item{{Category: "CompliancePolicies", Name: "C", Path: path}}, "", nil)
+	if len(results) != 1 || results[0].Err != nil {
+		t.Fatalf("results = %+v", results)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(target.Posts[0].Body, &body)
+	cfg := body["scheduledActionsForRule"].([]any)[0].(map[string]any)["scheduledActionConfigurations"].([]any)[0].(map[string]any)
+	if cfg["notificationTemplateId"] != "00000000-0000-0000-0000-000000000000" {
+		t.Errorf("notificationTemplateId = %v, want zero GUID", cfg["notificationTemplateId"])
+	}
+	if cc := cfg["notificationMessageCCList"].([]any); len(cc) != 0 {
+		t.Errorf("notificationMessageCCList = %v, want empty", cc)
+	}
+	if cfg["actionType"] != "block" || cfg["gracePeriodHours"] != float64(0) {
+		t.Errorf("action schedule changed: %v", cfg)
+	}
+}
+
 // TestRunSyncWarnsOnPartialContent: a live source type that needs a per-item
 // detail fetch (configurationPolicies / DetailByID) but whose detail GET fails
 // is still created, with Warn set so the incomplete copy is surfaced.
