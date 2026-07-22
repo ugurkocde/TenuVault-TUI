@@ -148,7 +148,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "Failed":
 				m.status, m.statusKind = "Backup failed", "err"
 			case "CompletedWithWarnings":
-				m.status, m.statusKind = "Backup completed with warnings", "warn"
+				if total == 0 {
+					m.status, m.statusKind = "Backup found 0 policies · check the active tenant and category selection", "warn"
+				} else {
+					m.status, m.statusKind = "Backup completed with warnings", "warn"
+				}
 			case "Cancelled":
 				m.status, m.statusKind = "Backup cancelled · "+m.progResult, "warn"
 			default:
@@ -556,6 +560,7 @@ func (m model) keyBackupSelect(key string) (tea.Model, tea.Cmd) {
 func (m model) keyBrowse(key string) (tea.Model, tea.Cmd) {
 	if m.browseLoading || m.diffLoading {
 		if key == "esc" || key == "q" {
+			m.diffGen++ // orphan the in-flight compare so its result is dropped
 			m.diffLoading = false
 			m.goTo(screenDashboard)
 		}

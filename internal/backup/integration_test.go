@@ -451,3 +451,21 @@ func TestSettingsCatalogFilesArePortalImportable(t *testing.T) {
 		t.Error("settingInstance @odata.type must be preserved")
 	}
 }
+
+// TestRunWithZeroPoliciesWarns: a run where every selected category comes back
+// empty is almost always the wrong tenant or category selection, so it must
+// not present as a clean Success.
+func TestRunWithZeroPoliciesWarns(t *testing.T) {
+	dc, _ := catalog.ByKey("deviceConfigurations")
+	f := &graphtest.Fake{Lists: map[string][]json.RawMessage{
+		"beta " + dc.ListPath: {},
+	}}
+	res, err := Run(context.Background(), f, []catalog.PolicyType{dc},
+		Options{Root: t.TempDir(), Tenant: graph.Tenant{ID: "t1", DisplayName: "Lab"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "CompletedWithWarnings" {
+		t.Fatalf("status = %q, want CompletedWithWarnings for a zero-policy run", res.Status)
+	}
+}

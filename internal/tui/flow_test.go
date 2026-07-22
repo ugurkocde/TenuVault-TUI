@@ -168,3 +168,27 @@ func TestQOnlyQuitsFromTopLevelScreens(t *testing.T) {
 		t.Fatal("q should quit from the dashboard")
 	}
 }
+
+// TestAbortedCompareDropsLateResult: esc during "comparing backups" orphans
+// the in-flight diff; when its result lands later it must be ignored instead
+// of toasting or hijacking whatever screen the user is on now.
+func TestAbortedCompareDropsLateResult(t *testing.T) {
+	m := New(testConfig(t))
+	m.connected = true
+	m.screen = screenBrowse
+	m.diffLoading = true
+	gen := m.diffGen
+
+	next, _ := m.keyBrowse("esc")
+	got := next.(model)
+	if got.diffGen == gen || got.diffLoading {
+		t.Fatalf("gen=%d loading=%v, want abort to orphan the in-flight compare", got.diffGen, got.diffLoading)
+	}
+
+	late, _ := got.Update(diffDoneMsg{changes: []diff.Change{{Category: "X", Name: "Y"}}, gen: gen})
+	final := late.(model)
+	if final.screen != screenDashboard || final.status != "" || final.diffChanges != nil {
+		t.Fatalf("screen=%v status=%q changes=%v, want stale result fully dropped",
+			final.screen, final.status, final.diffChanges)
+	}
+}

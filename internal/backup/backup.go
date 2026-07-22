@@ -226,6 +226,10 @@ loop:
 			warned++
 		}
 	}
+	total := 0
+	for _, c := range counts {
+		total += c
+	}
 	status := "Success"
 	switch {
 	case cancelled:
@@ -233,6 +237,11 @@ loop:
 	case failed > 0 && failed == len(order):
 		status = "Failed"
 	case failed > 0 || warned > 0:
+		status = "CompletedWithWarnings"
+	case total == 0 && len(order) > 0:
+		// Every selected category came back empty. Technically fine, but far
+		// more often the wrong tenant or category selection: surface it as a
+		// warning instead of a clean green success.
 		status = "CompletedWithWarnings"
 	}
 

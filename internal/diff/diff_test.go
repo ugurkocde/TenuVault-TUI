@@ -119,9 +119,77 @@ func TestCompareReturnsStableSortedChanges(t *testing.T) {
 	}
 }
 
-func TestIndexByNameReportsDisappearingCategory(t *testing.T) {
+func TestIndexPoliciesReportsDisappearingCategory(t *testing.T) {
 	backup := store.Backup{Path: t.TempDir()}
-	if _, err := indexByName(backup, "DeletedDuringCompare"); err == nil {
+	if _, err := indexPolicies(backup, "DeletedDuringCompare"); err == nil {
 		t.Fatal("a category expected to exist must not be treated as empty")
+	}
+}
+
+// TestCompareTracksRenameAsModified: pairing is by Graph id, so a pure
+// displayName change is one Modified row under the new name, never a
+// misleading Removed + Added pair.
+func TestCompareTracksRenameAsModified(t *testing.T) {
+	root := t.TempDir()
+	a := writeBackup(t, root, "backup-a", map[string]map[string]string{
+		"ConfigurationPolicies": {"Old Name": `{"id":"p1","name":"Old Name","x":1}`},
+	})
+	b := writeBackup(t, root, "backup-b", map[string]map[string]string{
+		"ConfigurationPolicies": {"New Name": `{"id":"p1","name":"New Name","x":1}`},
+	})
+	changes, err := Compare(a, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Change{{"ConfigurationPolicies", "New Name", Modified, Warning}}
+	if !reflect.DeepEqual(changes, want) {
+		t.Fatalf("changes = %+v, want single Modified under the new name", changes)
+	}
+}
+
+// TestCompareSurvivesDuplicateNameSuffixShuffle: two policies share a display
+// name; which file carries the " (2)" suffix flips between backup runs. Id
+// pairing must still match each policy to itself and report no drift.
+func TestCompareSurvivesDuplicateNameSuffixShuffle(t *testing.T) {
+	root := t.TempDir()
+	a := writeBackup(t, root, "backup-a", map[string]map[string]string{
+		"ConfigurationPolicies": {
+			"Dup":     `{"id":"p1","name":"Dup","x":1}`,
+			"Dup (2)": `{"id":"p2","name":"Dup","x":2}`,
+		},
+	})
+	b := writeBackup(t, root, "backup-b", map[string]map[string]string{
+		"ConfigurationPolicies": {
+			"Dup":     `{"id":"p2","name":"Dup","x":2}`,
+			"Dup (2)": `{"id":"p1","name":"Dup","x":1}`,
+		},
+	})
+	changes, err := Compare(a, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("changes = %+v, want none for a suffix shuffle", changes)
+	}
+}
+
+// TestCompareIgnoresAnnotationFormatChurn: backups taken by different
+// TenuVault versions differ only in OData annotation bookkeeping (old files
+// carry settings@odata.context, new ones a stamped @odata.context). That must
+// never register as drift.
+func TestCompareIgnoresAnnotationFormatChurn(t *testing.T) {
+	root := t.TempDir()
+	a := writeBackup(t, root, "backup-a", map[string]map[string]string{
+		"ConfigurationPolicies": {"Baseline": `{"id":"p1","name":"Baseline","settings@odata.context":"https://old","settings":[{"id":"0"}]}`},
+	})
+	b := writeBackup(t, root, "backup-b", map[string]map[string]string{
+		"ConfigurationPolicies": {"Baseline": `{"@odata.context":"https://new","id":"p1","name":"Baseline","settings":[{"id":"0"}]}`},
+	})
+	changes, err := Compare(a, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("changes = %+v, want none for annotation churn", changes)
 	}
 }
