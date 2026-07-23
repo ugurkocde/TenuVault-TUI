@@ -14,6 +14,16 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
 </p>
 
+<h2 align="center">Watch the full walkthrough</h2>
+
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=7qKBV6DVvYM" target="_blank" rel="noopener noreferrer">
+    <img src="docs/walkthrough-video.png" alt="Watch Intune Backup &amp; Restore with TenuVault TUI on YouTube" width="640">
+  </a>
+  <br>
+  <a href="https://www.youtube.com/watch?v=7qKBV6DVvYM" target="_blank" rel="noopener noreferrer"><strong>Intune Backup &amp; Restore with TenuVault TUI</strong></a>
+</p>
+
 <p align="center">
   <img src="docs/demo.gif" alt="Taking a first backup in the TenuVault TUI" width="930">
 </p>
