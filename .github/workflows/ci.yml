@@ -17,7 +17,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: stable
+          # Match go.mod: a newer stable Go makes the pinned golangci-lint panic.
+          go-version-file: go.mod
 
       - name: Verify formatting
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
