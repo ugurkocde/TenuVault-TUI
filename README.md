@@ -14,6 +14,19 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
 </p>
 
+> [!IMPORTANT]
+> **TenuVault TUI is no longer developed.** It is replaced by
+> [TenuVault Desktop](https://www.tenuvault.com/intune-backup), a graphical
+> desktop app for Windows and macOS that backs up and restores Microsoft Intune
+> configuration, detects drift and deploys OpenIntuneBaseline. TenuVault Desktop
+> is free for one tenant. Download it from
+> [tenuvault.com/download](https://www.tenuvault.com/download); the source is at
+> [ugurkocde/TenuVault](https://github.com/ugurkocde/TenuVault).
+>
+> This repository is kept read-only for reference. The terminal app gets no new
+> features or fixes, and its package-manager entries (WinGet, PowerShell Gallery,
+> Homebrew) are no longer updated.
+
 <h2 align="center">Watch the full walkthrough</h2>
 
 <p align="center">
